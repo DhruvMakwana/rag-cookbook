@@ -13,6 +13,7 @@ llama-index-core>=0.14          # sentence_window, small_to_big
 sentence-transformers>=3.0      # semantic scoring in adaptive_chunk
 transformers>=4.40              # late_chunking's underlying model, proposition_chunk
 sentencepiece>=0.2              # required by the T5-based propositionizer tokenizer
+protobuf>=4.25                  # also required by that tokenizer's slow->fast conversion path
 
 # LLM providers — used by `agentic` (via chonkie's SlumberChunker + llm.py's
 # genie adapters). Install whichever you plan to use (see .env.example).
