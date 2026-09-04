@@ -17,12 +17,11 @@ import os
 import re
 from pathlib import Path
 
+import llm
 import numpy as np
 from dotenv import load_dotenv
-from sentence_transformers import SentenceTransformer
-
-import llm
 from download_data import DEFAULT_PDF_PATH, download_sample_pdf
+from sentence_transformers import SentenceTransformer
 
 DATA_DIR = Path(__file__).parent / "data"
 
@@ -93,12 +92,14 @@ def fixed_size_chunk(text: str, chunk_size: int = 512, overlap: int = 50) -> lis
     chunks = []
     start = 0
     while start < len(text):
-        chunks.append(text[start:start + chunk_size])
+        chunks.append(text[start : start + chunk_size])
         start += chunk_size - overlap
     # Filter out whitespace-only chunks, but don't rewrite the ones we keep —
     # stripping each chunk independently would trim differing amounts of
     # whitespace off each edge and shift the overlap alignment between them.
     return [c for c in chunks if c.strip()]
+
+
 # --8<-- [end:fixed_size]
 
 
@@ -149,6 +150,8 @@ def recursive_chunk(
         chunks.append(combined)
         carry = combined[-overlap:] if overlap else ""
     return [c for c in chunks if c.strip()]
+
+
 # --8<-- [end:recursive]
 
 
@@ -167,7 +170,9 @@ def structure_aware_chunk_markdown(markdown_text: str) -> list[dict]:
     def flush():
         body = "\n".join(current_body).strip()
         if body:
-            chunks.append({"heading_path": " > ".join(current_heading_path), "text": body})
+            chunks.append(
+                {"heading_path": " > ".join(current_heading_path), "text": body}
+            )
 
     for line in lines:
         header_match = re.match(r"^(#{1,6})\s+(.*)", line)
@@ -181,6 +186,8 @@ def structure_aware_chunk_markdown(markdown_text: str) -> list[dict]:
             current_body.append(line)
     flush()
     return chunks
+
+
 # --8<-- [end:structure_aware]
 
 
@@ -188,7 +195,9 @@ def structure_aware_chunk_markdown(markdown_text: str) -> list[dict]:
 # 4. Semantic chunking
 # ======================================================================
 # --8<-- [start:semantic]
-def semantic_chunk(text: str, embed_model: SentenceTransformer, threshold: float = 0.6) -> list[str]:
+def semantic_chunk(
+    text: str, embed_model: SentenceTransformer, threshold: float = 0.6
+) -> list[str]:
     """Embed each sentence, walk through in order, and cut a new chunk
     whenever similarity to the next sentence drops below `threshold`
     (a topic shift). Lower threshold = fewer, larger chunks."""
@@ -196,7 +205,9 @@ def semantic_chunk(text: str, embed_model: SentenceTransformer, threshold: float
     if len(sentences) < 2:
         return sentences
 
-    embeddings = embed_model.encode(sentences, convert_to_numpy=True, show_progress_bar=False)
+    embeddings = embed_model.encode(
+        sentences, convert_to_numpy=True, show_progress_bar=False
+    )
 
     chunks, current = [], [sentences[0]]
     for i in range(1, len(sentences)):
@@ -209,6 +220,8 @@ def semantic_chunk(text: str, embed_model: SentenceTransformer, threshold: float
     if current:
         chunks.append(" ".join(current))
     return chunks
+
+
 # --8<-- [end:semantic]
 
 
@@ -225,6 +238,8 @@ def sentence_window_chunk(text: str, window: int = 2) -> list[dict]:
         lo, hi = max(0, i - window), min(len(sentences), i + window + 1)
         result.append({"anchor": sentence, "window_text": " ".join(sentences[lo:hi])})
     return result
+
+
 # --8<-- [end:sentence_window]
 
 
@@ -232,7 +247,9 @@ def sentence_window_chunk(text: str, window: int = 2) -> list[dict]:
 # 6. Small-to-big / parent-document chunking
 # ======================================================================
 # --8<-- [start:small_to_big]
-def small_to_big_chunk(text: str, parent_size: int = 1500, child_size: int = 250, overlap: int = 30) -> list[dict]:
+def small_to_big_chunk(
+    text: str, parent_size: int = 1500, child_size: int = 250, overlap: int = 30
+) -> list[dict]:
     """Embed the small child chunks (precise matching); retrieval fetches
     the linked parent chunk (full context) for generation instead."""
     parents = fixed_size_chunk(text, chunk_size=parent_size, overlap=0)
@@ -240,8 +257,12 @@ def small_to_big_chunk(text: str, parent_size: int = 1500, child_size: int = 250
     for parent_id, parent in enumerate(parents):
         children = fixed_size_chunk(parent, chunk_size=child_size, overlap=overlap)
         for child in children:
-            result.append({"parent_id": parent_id, "parent_text": parent, "child_text": child})
+            result.append(
+                {"parent_id": parent_id, "parent_text": parent, "child_text": child}
+            )
     return result
+
+
 # --8<-- [end:small_to_big]
 
 
@@ -249,7 +270,9 @@ def small_to_big_chunk(text: str, parent_size: int = 1500, child_size: int = 250
 # 7. Late chunking
 # ======================================================================
 # --8<-- [start:late_chunking]
-def late_chunk(text: str, boundaries: list[str], model_name: str = "answerdotai/ModernBERT-base") -> list[np.ndarray]:
+def late_chunk(
+    text: str, boundaries: list[str], model_name: str = "answerdotai/ModernBERT-base"
+) -> list[np.ndarray]:
     """Embed the WHOLE document first with a long-context model, so every
     token attends to every other token — THEN pool token embeddings within
     each chunk boundary. Chunk vectors end up carrying context from the
@@ -262,7 +285,13 @@ def late_chunk(text: str, boundaries: list[str], model_name: str = "answerdotai/
     model = AutoModel.from_pretrained(model_name, trust_remote_code=True)
     model.eval()
 
-    encoded = tokenizer(text, return_tensors="pt", return_offsets_mapping=True, truncation=True, max_length=8192)
+    encoded = tokenizer(
+        text,
+        return_tensors="pt",
+        return_offsets_mapping=True,
+        truncation=True,
+        max_length=8192,
+    )
     offsets = encoded.pop("offset_mapping")[0].tolist()
 
     with torch.no_grad():
@@ -278,7 +307,11 @@ def late_chunk(text: str, boundaries: list[str], model_name: str = "answerdotai/
         end_char = start_char + len(boundary_text)
         cursor = end_char
 
-        token_indices = [i for i, (s, e) in enumerate(offsets) if s < end_char and e > start_char and not (s == 0 and e == 0)]
+        token_indices = [
+            i
+            for i, (s, e) in enumerate(offsets)
+            if s < end_char and e > start_char and not (s == 0 and e == 0)
+        ]
         if not token_indices:
             continue
         span = token_embeddings[token_indices]
@@ -287,6 +320,8 @@ def late_chunk(text: str, boundaries: list[str], model_name: str = "answerdotai/
         chunk_embeddings.append(pooled.numpy())
 
     return chunk_embeddings
+
+
 # --8<-- [end:late_chunking]
 
 
@@ -311,6 +346,8 @@ def proposition_chunk(text_chunk: str, provider: str | None = None) -> list[str]
     prompt = PROPOSITION_PROMPT.format(passage=text_chunk)
     response = llm.generate(prompt, provider=provider)
     return [line.strip("- ").strip() for line in response.split("\n") if line.strip()]
+
+
 # --8<-- [end:proposition]
 
 
@@ -335,6 +372,8 @@ def agentic_chunk(text: str, provider: str | None = None) -> list[str]:
     prompt = AGENTIC_PROMPT.format(passage=text)
     response = llm.generate(prompt, provider=provider)
     return [c.strip() for c in response.split("---") if c.strip()]
+
+
 # --8<-- [end:agentic]
 
 
@@ -351,7 +390,9 @@ def _coherence_score(chunks: list[str], embed_model: SentenceTransformer) -> flo
         sentences = split_sentences(chunk)
         if len(sentences) < 2:
             continue
-        embeddings = embed_model.encode(sentences, convert_to_numpy=True, show_progress_bar=False)
+        embeddings = embed_model.encode(
+            sentences, convert_to_numpy=True, show_progress_bar=False
+        )
         pairwise = [
             cosine_sim(embeddings[i], embeddings[j])
             for i in range(len(embeddings))
@@ -362,7 +403,9 @@ def _coherence_score(chunks: list[str], embed_model: SentenceTransformer) -> flo
     return sum(scores) / len(scores) if scores else 0.0
 
 
-def adaptive_chunk(text: str, embed_model: SentenceTransformer) -> tuple[str, list[str]]:
+def adaptive_chunk(
+    text: str, embed_model: SentenceTransformer
+) -> tuple[str, list[str]]:
     """Run multiple candidate strategies, score each for coherence, and
     return whichever wins for THIS document — rather than hardcoding one
     strategy for every document type in a mixed corpus."""
@@ -371,17 +414,29 @@ def adaptive_chunk(text: str, embed_model: SentenceTransformer) -> tuple[str, li
         "recursive": recursive_chunk(text),
         "semantic": semantic_chunk(text, embed_model),
     }
-    scored = {name: _coherence_score(chunks, embed_model) for name, chunks in candidates.items()}
+    scored = {
+        name: _coherence_score(chunks, embed_model)
+        for name, chunks in candidates.items()
+    }
     best_name = max(scored, key=scored.get)
     print(f"Coherence scores: { {k: round(v, 3) for k, v in scored.items()} }")
     return best_name, candidates[best_name]
+
+
 # --8<-- [end:adaptive]
 
 
 STRATEGIES = [
-    "fixed_size", "recursive", "structure_aware", "semantic",
-    "sentence_window", "small_to_big", "late_chunking",
-    "proposition", "agentic", "adaptive",
+    "fixed_size",
+    "recursive",
+    "structure_aware",
+    "semantic",
+    "sentence_window",
+    "small_to_big",
+    "late_chunking",
+    "proposition",
+    "agentic",
+    "adaptive",
 ]
 
 
@@ -398,7 +453,9 @@ def run(strategy: str, threshold: float = 0.6) -> None:
         parsed = structure_aware_chunk_markdown(SAMPLE_MARKDOWN)
         for c in parsed[:3]:
             print(f"--- [{c['heading_path']}] ---\n{c['text']}\n")
-        print(f"\nstructure_aware: {len(parsed)} chunks (on a Markdown sample — the PDF has no headers to split on)")
+        print(
+            f"\nstructure_aware: {len(parsed)} chunks (on a Markdown sample — the PDF has no headers to split on)"
+        )
         return
     elif strategy in ("semantic", "sentence_window", "small_to_big", "adaptive"):
         embed_model = SentenceTransformer("all-MiniLM-L6-v2")
@@ -414,7 +471,9 @@ def run(strategy: str, threshold: float = 0.6) -> None:
     elif strategy == "late_chunking":
         boundaries = recursive_chunk(sample, chunk_size=300, overlap=0)
         embeddings = late_chunk(sample, boundaries)
-        print(f"Produced {len(embeddings)} chunk embeddings, dim={embeddings[0].shape if embeddings else None}")
+        print(
+            f"Produced {len(embeddings)} chunk embeddings, dim={embeddings[0].shape if embeddings else None}"
+        )
         return
     elif strategy == "proposition":
         first_chunk = recursive_chunk(sample, chunk_size=800)[0]
@@ -432,16 +491,25 @@ def run(strategy: str, threshold: float = 0.6) -> None:
 
     if strategy in ("fixed_size", "recursive") and len(chunks) >= 2:
         overlap_size = 50  # matches the default `overlap` these two strategies use
-        print(f"--- overlap check: end of chunk 0 vs. start of chunk 1 (last/first {overlap_size} chars) ---")
+        print(
+            f"--- overlap check: end of chunk 0 vs. start of chunk 1 (last/first {overlap_size} chars) ---"
+        )
         print("chunk 0 tail:", repr(chunks[0][-overlap_size:]))
         print("chunk 1 head:", repr(chunks[1][:overlap_size]))
         print()
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Run a chunking strategy against the sample document.")
+    parser = argparse.ArgumentParser(
+        description="Run a chunking strategy against the sample document."
+    )
     parser.add_argument("--strategy", choices=STRATEGIES + ["all"], default="recursive")
-    parser.add_argument("--threshold", type=float, default=0.6, help="Semantic chunking similarity threshold.")
+    parser.add_argument(
+        "--threshold",
+        type=float,
+        default=0.6,
+        help="Semantic chunking similarity threshold.",
+    )
     args = parser.parse_args()
 
     if args.strategy == "all":
