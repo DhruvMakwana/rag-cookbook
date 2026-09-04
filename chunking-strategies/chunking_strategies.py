@@ -1,29 +1,59 @@
 """
-Ten chunking strategies, implemented from scratch, run against the same
-sample document so you can see how differently each one splits identical
-text. No LangChain/LlamaIndex — see the blog page for when to reach for
-those instead of hand-rolling this yourself.
+Ten chunking strategies, each backed by a real, widely-used, tested
+implementation — not hand-rolled from scratch. Run against the same sample
+document so you can see how differently each one splits identical text.
+
+Libraries used, one per technique:
+    fixed_size        langchain-text-splitters   CharacterTextSplitter
+    recursive         langchain-text-splitters   RecursiveCharacterTextSplitter
+    structure_aware   langchain-text-splitters   MarkdownHeaderTextSplitter
+    semantic          chonkie                    SemanticChunker
+    sentence_window   llama-index-core           SentenceWindowNodeParser
+    small_to_big      llama-index-core           HierarchicalNodeParser
+    late_chunking     chonkie                    LateChunker
+    proposition       transformers               chentong00/propositionizer-wiki-flan-t5-large
+                                                  (the official Dense X Retrieval model)
+    agentic           chonkie                    SlumberChunker
+    adaptive          (orchestration over the above — no single library owns
+                       this meta-technique; it just picks among tested chunkers)
 
 Run:
     python chunking_strategies.py --strategy recursive
-    python chunking_strategies.py --strategy semantic --threshold 0.6
-    python chunking_strategies.py --strategy all   # runs every strategy, prints chunk counts
+    python chunking_strategies.py --strategy semantic --threshold 0.5
+    python chunking_strategies.py --strategy all
 """
 
 from __future__ import annotations
 
 import argparse
-import os
+import json
 import re
 from pathlib import Path
 
-import llm
 import numpy as np
+from chonkie import LateChunker, SemanticChunker, SlumberChunker
 from dotenv import load_dotenv
-from download_data import DEFAULT_PDF_PATH, download_sample_pdf
+from langchain_text_splitters import (
+    CharacterTextSplitter,
+    MarkdownHeaderTextSplitter,
+    RecursiveCharacterTextSplitter,
+)
+from llama_index.core import Document
+from llama_index.core.node_parser import HierarchicalNodeParser, SentenceWindowNodeParser, get_leaf_nodes
 from sentence_transformers import SentenceTransformer
+from transformers import AutoTokenizer, T5ForConditionalGeneration
+
+import llm
+from download_data import DEFAULT_PDF_PATH, download_sample_pdf
+
+# ======================================================================
+# Constants
+# ======================================================================
 
 DATA_DIR = Path(__file__).parent / "data"
+
+EMBEDDING_MODEL_NAME = "all-MiniLM-L6-v2"
+PROPOSITIONIZER_MODEL_NAME = "chentong00/propositionizer-wiki-flan-t5-large"
 
 # structure-aware chunking needs real Markdown headers to split on — the
 # sample PDF has none (PDFs don't carry Markdown structure), so it gets
@@ -51,6 +81,24 @@ All travel expenses must be submitted within 30 days with receipts attached.
 Home office equipment up to $500/year is reimbursable with manager approval.
 """
 
+STRATEGIES = [
+    "fixed_size",
+    "recursive",
+    "structure_aware",
+    "semantic",
+    "sentence_window",
+    "small_to_big",
+    "late_chunking",
+    "proposition",
+    "agentic",
+    "adaptive",
+]
+
+
+# ======================================================================
+# Setup / data loading helpers
+# ======================================================================
+
 
 def load_environment() -> None:
     local_env = Path(__file__).parent / ".env"
@@ -68,317 +116,165 @@ def load_sample_text() -> str:
     return "\n\n".join(page.extract_text() or "" for page in reader.pages)
 
 
-def split_sentences(text: str) -> list[str]:
-    """A simple regex sentence splitter — good enough for demo purposes.
-    Production systems should use a real sentence tokenizer (spaCy, nltk)
-    since abbreviations ("e.g.", "Fig. 3") will trip this up."""
-    text = re.sub(r"\s+", " ", text).strip()
-    sentences = re.split(r"(?<=[.!?])\s+(?=[A-Z])", text)
-    return [s.strip() for s in sentences if s.strip()]
-
-
 def cosine_sim(a: np.ndarray, b: np.ndarray) -> float:
     return float(np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b) + 1e-8))
 
 
 # ======================================================================
-# 1. Fixed-size chunking
+# 1. Fixed-size chunking — langchain-text-splitters CharacterTextSplitter
 # ======================================================================
 # --8<-- [start:fixed_size]
 def fixed_size_chunk(text: str, chunk_size: int = 512, overlap: int = 50) -> list[str]:
     """Split every `chunk_size` characters, with `overlap` characters of
-    redundancy between consecutive chunks so a boundary sentence still
-    appears intact in at least one chunk."""
-    chunks = []
-    start = 0
-    while start < len(text):
-        chunks.append(text[start : start + chunk_size])
-        start += chunk_size - overlap
-    # Filter out whitespace-only chunks, but don't rewrite the ones we keep —
-    # stripping each chunk independently would trim differing amounts of
-    # whitespace off each edge and shift the overlap alignment between them.
-    return [c for c in chunks if c.strip()]
-
-
+    redundancy between consecutive chunks. `separator=""` disables any
+    structure-awareness — this is the deliberately naive baseline."""
+    splitter = CharacterTextSplitter(separator="", chunk_size=chunk_size, chunk_overlap=overlap)
+    return splitter.split_text(text)
 # --8<-- [end:fixed_size]
 
 
 # ======================================================================
-# 2. Recursive chunking
+# 2. Recursive chunking — langchain-text-splitters RecursiveCharacterTextSplitter
 # ======================================================================
 # --8<-- [start:recursive]
-def recursive_chunk(
-    text: str,
-    chunk_size: int = 512,
-    overlap: int = 50,
-    separators: tuple[str, ...] = ("\n\n", "\n", ". ", " ", ""),
-) -> list[str]:
+def recursive_chunk(text: str, chunk_size: int = 512, overlap: int = 50) -> list[str]:
     """Try splitting on paragraph breaks first; only fall through to a
     finer separator (sentence, then word, then raw character) for any
-    piece that's still too large. Mirrors LangChain's
-    RecursiveCharacterTextSplitter, without the dependency."""
-
-    def _split(piece: str, seps: tuple[str, ...]) -> list[str]:
-        if len(piece) <= chunk_size or not seps:
-            return [piece]
-        sep, rest = seps[0], seps[1:]
-        parts = piece.split(sep) if sep else list(piece)
-        merged: list[str] = []
-        current = ""
-        for part in parts:
-            candidate = current + (sep if current else "") + part
-            if len(candidate) <= chunk_size:
-                current = candidate
-            else:
-                if current:
-                    merged.append(current)
-                current = part
-        if current:
-            merged.append(current)
-
-        result: list[str] = []
-        for m in merged:
-            result.extend(_split(m, rest) if len(m) > chunk_size else [m])
-        return result
-
-    raw_chunks = _split(text, separators)
-
-    # apply overlap across the final chunk boundaries
-    chunks, carry = [], ""
-    for c in raw_chunks:
-        combined = (carry + c) if carry else c
-        chunks.append(combined)
-        carry = combined[-overlap:] if overlap else ""
-    return [c for c in chunks if c.strip()]
-
-
+    piece that's still too large. The reference implementation of this
+    technique — most tutorials describing "recursive chunking" mean
+    exactly this class."""
+    splitter = RecursiveCharacterTextSplitter(chunk_size=chunk_size, chunk_overlap=overlap)
+    return splitter.split_text(text)
 # --8<-- [end:recursive]
 
 
 # ======================================================================
-# 3. Document/structure-aware chunking (Markdown headers)
+# 3. Document/structure-aware chunking — langchain-text-splitters MarkdownHeaderTextSplitter
 # ======================================================================
 # --8<-- [start:structure_aware]
 def structure_aware_chunk_markdown(markdown_text: str) -> list[dict]:
     """Split on Markdown headers, keeping the heading path as metadata —
     only works when the input actually has real header structure."""
-    lines = markdown_text.split("\n")
-    chunks: list[dict] = []
-    current_heading_path: list[str] = []
-    current_body: list[str] = []
-
-    def flush():
-        body = "\n".join(current_body).strip()
-        if body:
-            chunks.append(
-                {"heading_path": " > ".join(current_heading_path), "text": body}
-            )
-
-    for line in lines:
-        header_match = re.match(r"^(#{1,6})\s+(.*)", line)
-        if header_match:
-            flush()
-            current_body.clear()
-            level = len(header_match.group(1))
-            title = header_match.group(2).strip()
-            current_heading_path = current_heading_path[: level - 1] + [title]
-        else:
-            current_body.append(line)
-    flush()
-    return chunks
-
-
+    headers_to_split_on = [("#", "h1"), ("##", "h2"), ("###", "h3")]
+    splitter = MarkdownHeaderTextSplitter(headers_to_split_on=headers_to_split_on)
+    docs = splitter.split_text(markdown_text)
+    return [
+        {"heading_path": " > ".join(doc.metadata.values()), "text": doc.page_content}
+        for doc in docs
+    ]
 # --8<-- [end:structure_aware]
 
 
 # ======================================================================
-# 4. Semantic chunking
+# 4. Semantic chunking — chonkie SemanticChunker
 # ======================================================================
 # --8<-- [start:semantic]
-def semantic_chunk(
-    text: str, embed_model: SentenceTransformer, threshold: float = 0.6
-) -> list[str]:
-    """Embed each sentence, walk through in order, and cut a new chunk
-    whenever similarity to the next sentence drops below `threshold`
-    (a topic shift). Lower threshold = fewer, larger chunks."""
-    sentences = split_sentences(text)
-    if len(sentences) < 2:
-        return sentences
-
-    embeddings = embed_model.encode(
-        sentences, convert_to_numpy=True, show_progress_bar=False
-    )
-
-    chunks, current = [], [sentences[0]]
-    for i in range(1, len(sentences)):
-        sim = cosine_sim(embeddings[i - 1], embeddings[i])
-        if sim < threshold:
-            chunks.append(" ".join(current))
-            current = [sentences[i]]
-        else:
-            current.append(sentences[i])
-    if current:
-        chunks.append(" ".join(current))
-    return chunks
-
-
+def semantic_chunk(text: str, threshold: float = 0.6) -> list[str]:
+    """Embed sentences, walk through in order, and cut a new chunk
+    whenever similarity to the next sentence drops below `threshold` (a
+    topic shift). Lower threshold = fewer, larger chunks."""
+    chunker = SemanticChunker(embedding_model=EMBEDDING_MODEL_NAME, threshold=threshold)
+    chunks = chunker.chunk(text)
+    return [c.text for c in chunks]
 # --8<-- [end:semantic]
 
 
 # ======================================================================
-# 5. Sentence-window retrieval
+# 5. Sentence-window retrieval — llama-index SentenceWindowNodeParser
 # ======================================================================
 # --8<-- [start:sentence_window]
-def sentence_window_chunk(text: str, window: int = 2) -> list[dict]:
+def sentence_window_chunk(text: str, window_size: int = 2) -> list[dict]:
     """Index each sentence individually (precise matching unit), but keep
-    a window of `window` sentences on either side for generation context."""
-    sentences = split_sentences(text)
-    result = []
-    for i, sentence in enumerate(sentences):
-        lo, hi = max(0, i - window), min(len(sentences), i + window + 1)
-        result.append({"anchor": sentence, "window_text": " ".join(sentences[lo:hi])})
-    return result
-
-
+    a window of `window_size` sentences on either side for generation
+    context, attached as node metadata."""
+    parser = SentenceWindowNodeParser.from_defaults(window_size=window_size)
+    nodes = parser.get_nodes_from_documents([Document(text=text)])
+    return [{"anchor": n.text, "window_text": n.metadata["window"]} for n in nodes]
 # --8<-- [end:sentence_window]
 
 
 # ======================================================================
-# 6. Small-to-big / parent-document chunking
+# 6. Small-to-big / parent-document chunking — llama-index HierarchicalNodeParser
 # ======================================================================
 # --8<-- [start:small_to_big]
-def small_to_big_chunk(
-    text: str, parent_size: int = 1500, child_size: int = 250, overlap: int = 30
-) -> list[dict]:
+def small_to_big_chunk(text: str, parent_size: int = 1500, child_size: int = 250) -> list[dict]:
     """Embed the small child chunks (precise matching); retrieval fetches
-    the linked parent chunk (full context) for generation instead."""
-    parents = fixed_size_chunk(text, chunk_size=parent_size, overlap=0)
-    result = []
-    for parent_id, parent in enumerate(parents):
-        children = fixed_size_chunk(parent, chunk_size=child_size, overlap=overlap)
-        for child in children:
-            result.append(
-                {"parent_id": parent_id, "parent_text": parent, "child_text": child}
-            )
-    return result
-
-
+    the linked parent chunk (full context) for generation instead —
+    LlamaIndex's HierarchicalNodeParser + get_leaf_nodes is the reference
+    implementation, paired with AutoMergingRetriever in a full pipeline."""
+    parser = HierarchicalNodeParser.from_defaults(chunk_sizes=[parent_size, child_size])
+    nodes = parser.get_nodes_from_documents([Document(text=text)])
+    leaf_nodes = get_leaf_nodes(nodes)
+    return [
+        {
+            "parent_id": leaf.parent_node.node_id if leaf.parent_node else None,
+            "child_text": leaf.text,
+        }
+        for leaf in leaf_nodes
+    ]
 # --8<-- [end:small_to_big]
 
 
 # ======================================================================
-# 7. Late chunking
+# 7. Late chunking — chonkie LateChunker
 # ======================================================================
 # --8<-- [start:late_chunking]
-def late_chunk(
-    text: str, boundaries: list[str], model_name: str = "answerdotai/ModernBERT-base"
-) -> list[np.ndarray]:
+def late_chunk(text: str, chunk_size: int = 300) -> list[np.ndarray]:
     """Embed the WHOLE document first with a long-context model, so every
     token attends to every other token — THEN pool token embeddings within
-    each chunk boundary. Chunk vectors end up carrying context from the
-    rest of the document, unlike every other method here, which embeds
-    each chunk in isolation."""
-    import torch
-    from transformers import AutoModel, AutoTokenizer
-
-    tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
-    model = AutoModel.from_pretrained(model_name, trust_remote_code=True)
-    model.eval()
-
-    encoded = tokenizer(
-        text,
-        return_tensors="pt",
-        return_offsets_mapping=True,
-        truncation=True,
-        max_length=8192,
-    )
-    offsets = encoded.pop("offset_mapping")[0].tolist()
-
-    with torch.no_grad():
-        token_embeddings = model(**encoded)[0][0]  # (seq_len, hidden_dim)
-
-    # map each chunk's character span to its token index range, then mean-pool
-    chunk_embeddings = []
-    cursor = 0
-    for boundary_text in boundaries:
-        start_char = text.find(boundary_text, cursor)
-        if start_char == -1:
-            continue
-        end_char = start_char + len(boundary_text)
-        cursor = end_char
-
-        token_indices = [
-            i
-            for i, (s, e) in enumerate(offsets)
-            if s < end_char and e > start_char and not (s == 0 and e == 0)
-        ]
-        if not token_indices:
-            continue
-        span = token_embeddings[token_indices]
-        pooled = span.mean(dim=0)
-        pooled = pooled / pooled.norm()
-        chunk_embeddings.append(pooled.numpy())
-
-    return chunk_embeddings
-
-
+    each chunk boundary. Chunk vectors carry context from the rest of the
+    document, unlike every other method here, which embeds each chunk in
+    isolation."""
+    chunker = LateChunker(embedding_model="nomic-ai/modernbert-embed-base", chunk_size=chunk_size)
+    chunks = chunker.chunk(text)
+    return [c.embedding for c in chunks]
 # --8<-- [end:late_chunking]
 
 
 # ======================================================================
-# 8. Proposition-based chunking
+# 8. Proposition-based chunking — the official Dense X Retrieval model
 # ======================================================================
 # --8<-- [start:proposition]
-PROPOSITION_PROMPT = """Break the passage below into propositions: atomic, \
-self-contained factual statements. Each proposition must make sense on its \
-own with no pronouns or implicit references — spell out any names the \
-original text left implicit. Return one proposition per line, nothing else.
+def proposition_chunk(content: str, title: str = "", section: str = "") -> list[str]:
+    """Decompose a passage into propositions — atomic, self-contained
+    factual statements — using the actual model released by the Dense X
+    Retrieval authors (Chen et al., 2023), fine-tuned specifically for
+    this task. Input format ("Title: ... Section: ... Content: ...") and
+    JSON-list output are both fixed by how the model was trained."""
+    tokenizer = AutoTokenizer.from_pretrained(PROPOSITIONIZER_MODEL_NAME)
+    model = T5ForConditionalGeneration.from_pretrained(PROPOSITIONIZER_MODEL_NAME)
 
-Passage:
-{passage}"""
+    input_text = f"Title: {title}. Section: {section}. Content: {content}"
+    input_ids = tokenizer(input_text, return_tensors="pt", truncation=True).input_ids
+    output_ids = model.generate(input_ids, max_new_tokens=512)
+    output_text = tokenizer.decode(output_ids[0], skip_special_tokens=True)
 
-
-def proposition_chunk(text_chunk: str, provider: str | None = None) -> list[str]:
-    """Ask an LLM to decompose one chunk into atomic, self-contained
-    factual statements (Dense X Retrieval, Chen et al. 2023) — finer-
-    grained and more precisely retrievable than a raw sentence, at the
-    cost of one LLM call per source chunk."""
-    prompt = PROPOSITION_PROMPT.format(passage=text_chunk)
-    response = llm.generate(prompt, provider=provider)
-    return [line.strip("- ").strip() for line in response.split("\n") if line.strip()]
-
-
+    try:
+        return json.loads(output_text)
+    except json.JSONDecodeError:
+        return [output_text]  # model occasionally returns plain text instead of a JSON list
 # --8<-- [end:proposition]
 
 
 # ======================================================================
-# 9. Agentic chunking
+# 9. Agentic chunking — chonkie SlumberChunker
 # ======================================================================
 # --8<-- [start:agentic]
-AGENTIC_PROMPT = """Split the passage below into natural, meaningful \
-segments — the way a domain expert would group it, keeping related ideas \
-together even if they discuss superficially different sub-topics. \
-Return each segment separated by a line containing only "---".
-
-Passage:
-{passage}"""
-
-
-def agentic_chunk(text: str, provider: str | None = None) -> list[str]:
+def agentic_chunk(text: str, provider: str | None = None, chunk_size: int = 400) -> list[str]:
     """Let an LLM decide chunk boundaries directly, using its own reading
-    comprehension rather than a mechanical rule — the most expensive
-    strategy here, since it costs an LLM call per document (or per
-    windowed section, for long documents)."""
-    prompt = AGENTIC_PROMPT.format(passage=text)
-    response = llm.generate(prompt, provider=provider)
-    return [c.strip() for c in response.split("---") if c.strip()]
-
-
+    comprehension rather than a mechanical rule. Chonkie's SlumberChunker
+    implements the splitting algorithm (iteratively asking the model
+    "where should this chunk end"); `llm.get_genie` just wires in which
+    LLM answers those questions — see llm.py."""
+    genie = llm.get_genie(provider)
+    chunker = SlumberChunker(genie=genie, chunk_size=chunk_size, verbose=False)
+    chunks = chunker.chunk(text)
+    return [c.text for c in chunks]
 # --8<-- [end:agentic]
 
 
 # ======================================================================
-# 10. Adaptive chunking
+# 10. Adaptive chunking — orchestration over the tested chunkers above
 # ======================================================================
 # --8<-- [start:adaptive]
 def _coherence_score(chunks: list[str], embed_model: SentenceTransformer) -> float:
@@ -387,12 +283,10 @@ def _coherence_score(chunks: list[str], embed_model: SentenceTransformer) -> flo
     better."""
     scores = []
     for chunk in chunks:
-        sentences = split_sentences(chunk)
+        sentences = [s.strip() for s in re.split(r"(?<=[.!?])\s+", chunk) if s.strip()]
         if len(sentences) < 2:
             continue
-        embeddings = embed_model.encode(
-            sentences, convert_to_numpy=True, show_progress_bar=False
-        )
+        embeddings = embed_model.encode(sentences, convert_to_numpy=True, show_progress_bar=False)
         pairwise = [
             cosine_sim(embeddings[i], embeddings[j])
             for i in range(len(embeddings))
@@ -403,41 +297,29 @@ def _coherence_score(chunks: list[str], embed_model: SentenceTransformer) -> flo
     return sum(scores) / len(scores) if scores else 0.0
 
 
-def adaptive_chunk(
-    text: str, embed_model: SentenceTransformer
-) -> tuple[str, list[str]]:
-    """Run multiple candidate strategies, score each for coherence, and
-    return whichever wins for THIS document — rather than hardcoding one
-    strategy for every document type in a mixed corpus."""
+def adaptive_chunk(text: str) -> tuple[str, list[str]]:
+    """Run multiple candidate strategies — each one a tested library
+    implementation, not a custom one — score each for coherence, and
+    return whichever wins for THIS document, rather than hardcoding one
+    strategy for every document type in a mixed corpus. The selection
+    logic itself is necessarily custom (no single library owns this
+    meta-technique); what it selects between is not."""
+    embed_model = SentenceTransformer(EMBEDDING_MODEL_NAME)
     candidates = {
         "fixed_size": fixed_size_chunk(text),
         "recursive": recursive_chunk(text),
-        "semantic": semantic_chunk(text, embed_model),
+        "semantic": semantic_chunk(text),
     }
-    scored = {
-        name: _coherence_score(chunks, embed_model)
-        for name, chunks in candidates.items()
-    }
+    scored = {name: _coherence_score(chunks, embed_model) for name, chunks in candidates.items()}
     best_name = max(scored, key=scored.get)
     print(f"Coherence scores: { {k: round(v, 3) for k, v in scored.items()} }")
     return best_name, candidates[best_name]
-
-
 # --8<-- [end:adaptive]
 
 
-STRATEGIES = [
-    "fixed_size",
-    "recursive",
-    "structure_aware",
-    "semantic",
-    "sentence_window",
-    "small_to_big",
-    "late_chunking",
-    "proposition",
-    "agentic",
-    "adaptive",
-]
+# ======================================================================
+# CLI
+# ======================================================================
 
 
 def run(strategy: str, threshold: float = 0.6) -> None:
@@ -453,63 +335,40 @@ def run(strategy: str, threshold: float = 0.6) -> None:
         parsed = structure_aware_chunk_markdown(SAMPLE_MARKDOWN)
         for c in parsed[:3]:
             print(f"--- [{c['heading_path']}] ---\n{c['text']}\n")
-        print(
-            f"\nstructure_aware: {len(parsed)} chunks (on a Markdown sample — the PDF has no headers to split on)"
-        )
+        print(f"\nstructure_aware: {len(parsed)} chunks (on a Markdown sample — the PDF has no headers to split on)")
         return
-    elif strategy in ("semantic", "sentence_window", "small_to_big", "adaptive"):
-        embed_model = SentenceTransformer("all-MiniLM-L6-v2")
-        if strategy == "semantic":
-            chunks = semantic_chunk(sample, embed_model, threshold=threshold)
-        elif strategy == "sentence_window":
-            chunks = [c["window_text"] for c in sentence_window_chunk(sample)]
-        elif strategy == "small_to_big":
-            chunks = [c["child_text"] for c in small_to_big_chunk(sample)]
-        else:
-            name, chunks = adaptive_chunk(sample, embed_model)
-            print(f"Adaptive chunking picked: {name}")
+    elif strategy == "semantic":
+        chunks = semantic_chunk(sample, threshold=threshold)
+    elif strategy == "sentence_window":
+        chunks = [c["window_text"] for c in sentence_window_chunk(sample)]
+    elif strategy == "small_to_big":
+        chunks = [c["child_text"] for c in small_to_big_chunk(sample)]
     elif strategy == "late_chunking":
-        boundaries = recursive_chunk(sample, chunk_size=300, overlap=0)
-        embeddings = late_chunk(sample, boundaries)
-        print(
-            f"Produced {len(embeddings)} chunk embeddings, dim={embeddings[0].shape if embeddings else None}"
-        )
+        embeddings = late_chunk(sample)
+        print(f"Produced {len(embeddings)} chunk embeddings, dim={embeddings[0].shape if embeddings else None}")
         return
     elif strategy == "proposition":
         first_chunk = recursive_chunk(sample, chunk_size=800)[0]
-        chunks = proposition_chunk(first_chunk)
+        chunks = proposition_chunk(first_chunk, title="Attention Is All You Need")
     elif strategy == "agentic":
         chunks = agentic_chunk(sample[:2000])
+    elif strategy == "adaptive":
+        name, chunks = adaptive_chunk(sample)
+        print(f"Adaptive chunking picked: {name}")
     else:
         raise ValueError(f"Unknown strategy: {strategy}")
 
     print(f"\n{strategy}: {len(chunks)} chunks\n")
     for i, c in enumerate(chunks[:3]):
         print(f"--- chunk {i} ({len(c)} chars) ---")
-        print(c[:300])
-        print()
-
-    if strategy in ("fixed_size", "recursive") and len(chunks) >= 2:
-        overlap_size = 50  # matches the default `overlap` these two strategies use
-        print(
-            f"--- overlap check: end of chunk 0 vs. start of chunk 1 (last/first {overlap_size} chars) ---"
-        )
-        print("chunk 0 tail:", repr(chunks[0][-overlap_size:]))
-        print("chunk 1 head:", repr(chunks[1][:overlap_size]))
-        print()
+        print(c)  # full chunk, not truncated — overlap and boundary behavior
+        print()   # only actually show up if you can see the whole thing
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(
-        description="Run a chunking strategy against the sample document."
-    )
+    parser = argparse.ArgumentParser(description="Run a chunking strategy against the sample document.")
     parser.add_argument("--strategy", choices=STRATEGIES + ["all"], default="recursive")
-    parser.add_argument(
-        "--threshold",
-        type=float,
-        default=0.6,
-        help="Semantic chunking similarity threshold.",
-    )
+    parser.add_argument("--threshold", type=float, default=0.6, help="Semantic chunking similarity threshold.")
     args = parser.parse_args()
 
     if args.strategy == "all":

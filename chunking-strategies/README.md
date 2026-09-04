@@ -1,6 +1,19 @@
 # Chunking Strategies
 
-Ten chunking strategies implemented from scratch against the same sample document, so you can actually see how differently each one splits identical text. Concept write-up: [Chunking Strategies](https://dhruvmakwana.github.io/rag-deep-dive/chunking/).
+Ten chunking strategies, each backed by a real, widely-used, tested implementation — not hand-rolled from scratch — run against the same sample document so you can see how differently each one splits identical text. Concept write-up: [Chunking Strategies](https://dhruvmakwana.github.io/rag-deep-dive/chunking/).
+
+| Strategy | Library | Class |
+|---|---|---|
+| `fixed_size` | [langchain-text-splitters](https://github.com/langchain-ai/langchain) | `CharacterTextSplitter` |
+| `recursive` | langchain-text-splitters | `RecursiveCharacterTextSplitter` |
+| `structure_aware` | langchain-text-splitters | `MarkdownHeaderTextSplitter` |
+| `semantic` | [chonkie](https://pypi.org/project/chonkie) | `SemanticChunker` |
+| `sentence_window` | [llama-index-core](https://github.com/run-llama/llama_index) | `SentenceWindowNodeParser` |
+| `small_to_big` | llama-index-core | `HierarchicalNodeParser` |
+| `late_chunking` | chonkie | `LateChunker` |
+| `proposition` | [transformers](https://huggingface.co/chentong00/propositionizer-wiki-flan-t5-large) | the official Dense X Retrieval model (Chen et al., 2023) |
+| `agentic` | chonkie | `SlumberChunker` (LLM-guided) |
+| `adaptive` | — | orchestrates the 3 chunkers above; no library owns this meta-technique |
 
 ## Install
 
@@ -9,14 +22,14 @@ python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-`sentence-transformers` + `transformers` pull in PyTorch — expect a few hundred MB and a couple of minutes, one time only. `late_chunking` additionally downloads `answerdotai/ModernBERT-base` (~570MB) on first run.
+Pulls in PyTorch (via sentence-transformers/transformers) — a few hundred MB, a couple of minutes, one time only. `late_chunking` additionally downloads `nomic-ai/modernbert-embed-base`, and `proposition` downloads the ~780M-parameter propositionizer model, both on first run.
 
-## Configure (only needed for `proposition` and `agentic`)
+## Configure (only needed for `agentic`)
 
 ```bash
 cp .env.example .env
 ```
-Fill in a key for whichever `LLM_PROVIDER` you set (`anthropic` | `openai` | `ollama`). Every other strategy runs fully locally with no key.
+Fill in a key for whichever `LLM_PROVIDER` you set (`anthropic` | `openai` | `ollama`). Every other strategy runs fully locally with no key — including `proposition`, which uses a locally-run model, not an API call.
 
 ## Run
 
@@ -26,25 +39,12 @@ python chunking_strategies.py --strategy semantic --threshold 0.5
 python chunking_strategies.py --strategy all          # runs all 10, one after another
 ```
 
-| `--strategy` | Needs | What it demonstrates |
-|---|---|---|
-| `fixed_size` | nothing | Naive baseline: cut every N characters |
-| `recursive` | nothing | Paragraph → sentence → word fallback splitting |
-| `structure_aware` | nothing | Splits a Markdown sample on real headers (the PDF has none, so this uses its own sample text) |
-| `semantic` | local embedding model | Cuts where adjacent-sentence similarity drops |
-| `sentence_window` | local embedding model* | Precise anchor + surrounding context window |
-| `small_to_big` | nothing | Small child chunks linked to a larger parent |
-| `late_chunking` | local long-context model | Embeds the whole doc first, pools per chunk after — see the blog page for why this is structurally different from every other method here |
-| `proposition` | LLM key | Atomic, self-contained factual statements (Dense X Retrieval) |
-| `agentic` | LLM key | LLM decides boundaries directly |
-| `adaptive` | local embedding model | Runs 3 strategies, scores coherence, picks the winner |
-
-\* `sentence_window` doesn't strictly need embeddings to run, but the CLI loads the model anyway since it's grouped with the other embedding-based demos.
+Each run prints full chunks (not truncated) so overlap and boundary behavior between consecutive chunks is directly visible, not just asserted.
 
 ## Files
 
 | File | Role |
 |---|---|
-| `chunking_strategies.py` | All 10 strategies + the CLI |
-| `llm.py` | Pluggable generation step — Anthropic / OpenAI / Ollama (used by `proposition`, `agentic`) |
+| `chunking_strategies.py` | All 10 strategies (each wrapping a real library call) + the CLI |
+| `llm.py` | Genie adapters for `agentic` — Anthropic/Ollama adapters implementing Chonkie's `BaseGenie` interface, plus Chonkie's own `OpenAIGenie` |
 | `download_data.py` | Fetches the same sample PDF used in `naive-rag/` |

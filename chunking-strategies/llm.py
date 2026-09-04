@@ -1,76 +1,70 @@
 """
-Pluggable LLM providers for the generation step.
+Genie (LLM backend) adapters for chonkie.SlumberChunker, used by
+`agentic_chunk` in chunking_strategies.py.
 
-Pick a provider with the LLM_PROVIDER env var: "anthropic" | "openai" | "ollama".
-Anthropic and OpenAI need an API key (read from .env, never logged or printed).
-Ollama runs fully locally and needs no key at all — good for testing the
-pipeline with zero cost/signup, as long as you have Ollama installed and
-`ollama pull llama3.1` (or similar) has been run once.
+SlumberChunker's chunking ALGORITHM is Chonkie's own, tested implementation
+— a "genie" is just the pluggable LLM backend it calls internally to decide
+split points. Chonkie ships OpenAI/Gemini/Groq/Cerebras/Azure genies out of
+the box; Anthropic and Ollama aren't among them, so this file adds two
+minimal adapters implementing BaseGenie's documented `generate()` interface
+— the officially supported extension point, not a reimplementation of any
+chunking logic.
 """
 
 import os
 
-# --8<-- [start:provider_dispatch]
-def generate(prompt: str, provider: str | None = None, model: str | None = None) -> str:
-    """Route to the configured LLM provider and return its text response."""
+from chonkie.genie import BaseGenie, OpenAIGenie
+
+
+class AnthropicGenie(BaseGenie):
+    def __init__(self, model: str | None = None):
+        import anthropic
+
+        api_key = os.environ.get("ANTHROPIC_API_KEY")
+        if not api_key:
+            raise RuntimeError("ANTHROPIC_API_KEY is not set. Add it to your .env file.")
+        self.client = anthropic.Anthropic(api_key=api_key)
+        self.model = model or os.environ.get("ANTHROPIC_MODEL", "claude-sonnet-4-5")
+
+    def generate(self, prompt: str) -> str:
+        response = self.client.messages.create(
+            model=self.model,
+            max_tokens=1024,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        return response.content[0].text
+
+
+class OllamaGenie(BaseGenie):
+    def __init__(self, model: str | None = None):
+        self.url = os.environ.get("OLLAMA_URL", "http://localhost:11434/api/generate")
+        self.model = model or os.environ.get("OLLAMA_MODEL", "llama3.1")
+
+    def generate(self, prompt: str) -> str:
+        import requests
+
+        response = requests.post(
+            self.url,
+            json={"model": self.model, "prompt": prompt, "stream": False},
+            timeout=120,
+        )
+        response.raise_for_status()
+        return response.json()["response"]
+
+
+def get_genie(provider: str | None = None) -> BaseGenie:
+    """Return a Chonkie-compatible genie for whichever provider LLM_PROVIDER
+    (or `provider`) names: 'anthropic' | 'openai' | 'ollama'."""
     provider = (provider or os.environ.get("LLM_PROVIDER", "anthropic")).lower()
 
     if provider == "anthropic":
-        return _generate_anthropic(prompt, model or os.environ.get("ANTHROPIC_MODEL", "claude-sonnet-4-5"))
+        return AnthropicGenie()
     if provider == "openai":
-        return _generate_openai(prompt, model or os.environ.get("OPENAI_MODEL", "gpt-4o-mini"))
+        api_key = os.environ.get("OPENAI_API_KEY")
+        if not api_key:
+            raise RuntimeError("OPENAI_API_KEY is not set. Add it to your .env file.")
+        return OpenAIGenie(model=os.environ.get("OPENAI_MODEL", "gpt-4o-mini"), api_key=api_key)
     if provider == "ollama":
-        return _generate_ollama(prompt, model or os.environ.get("OLLAMA_MODEL", "llama3.1"))
+        return OllamaGenie()
 
     raise ValueError(f"Unknown LLM_PROVIDER '{provider}'. Use 'anthropic', 'openai', or 'ollama'.")
-# --8<-- [end:provider_dispatch]
-
-
-# --8<-- [start:provider_anthropic]
-def _generate_anthropic(prompt: str, model: str) -> str:
-    import anthropic
-
-    api_key = os.environ.get("ANTHROPIC_API_KEY")
-    if not api_key:
-        raise RuntimeError("ANTHROPIC_API_KEY is not set. Add it to your .env file.")
-
-    client = anthropic.Anthropic(api_key=api_key)
-    response = client.messages.create(
-        model=model,
-        max_tokens=1024,
-        messages=[{"role": "user", "content": prompt}],
-    )
-    return response.content[0].text
-# --8<-- [end:provider_anthropic]
-
-
-# --8<-- [start:provider_openai]
-def _generate_openai(prompt: str, model: str) -> str:
-    from openai import OpenAI
-
-    api_key = os.environ.get("OPENAI_API_KEY")
-    if not api_key:
-        raise RuntimeError("OPENAI_API_KEY is not set. Add it to your .env file.")
-
-    client = OpenAI(api_key=api_key)
-    response = client.chat.completions.create(
-        model=model,
-        messages=[{"role": "user", "content": prompt}],
-    )
-    return response.choices[0].message.content
-# --8<-- [end:provider_openai]
-
-
-# --8<-- [start:provider_ollama]
-def _generate_ollama(prompt: str, model: str) -> str:
-    import requests
-
-    url = os.environ.get("OLLAMA_URL", "http://localhost:11434/api/generate")
-    response = requests.post(
-        url,
-        json={"model": model, "prompt": prompt, "stream": False},
-        timeout=120,
-    )
-    response.raise_for_status()
-    return response.json()["response"]
-# --8<-- [end:provider_ollama]

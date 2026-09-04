@@ -4,13 +4,18 @@ numpy>=1.26
 python-dotenv>=1.0
 requests>=2.31
 
-# Embeddings — used by semantic, sentence-window scoring, small-to-big,
-# adaptive, and late chunking (late chunking additionally needs `transformers`
-# + `torch`, which sentence-transformers already pulls in).
-sentence-transformers>=3.0
-transformers>=4.40
+# Chunking libraries — one real, tested implementation per technique.
+langchain-text-splitters>=0.3   # fixed_size, recursive, structure_aware
+chonkie>=1.7                    # semantic, late_chunking, agentic (SlumberChunker)
+llama-index-core>=0.14          # sentence_window, small_to_big
 
-# LLM providers — used by proposition and agentic chunking. Install
-# whichever you plan to use (see .env.example). Ollama needs no SDK.
+# Embeddings + the official proposition-chunking model
+sentence-transformers>=3.0      # semantic scoring in adaptive_chunk
+transformers>=4.40              # late_chunking's underlying model, proposition_chunk
+sentencepiece>=0.2              # required by the T5-based propositionizer tokenizer
+
+# LLM providers — used by `agentic` (via chonkie's SlumberChunker + llm.py's
+# genie adapters). Install whichever you plan to use (see .env.example).
+# Ollama needs no SDK.
 anthropic>=0.34
 openai>=1.40
