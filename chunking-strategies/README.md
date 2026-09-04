@@ -45,6 +45,7 @@ Each run prints full chunks (not truncated) so overlap and boundary behavior bet
 
 | File | Role |
 |---|---|
-| `chunking_strategies.py` | All 10 strategies (each wrapping a real library call) + the CLI |
+| `chunking_strategies.py` | All 10 strategies (each wrapping a real library call) + the CLI — the file you actually run |
+| `chunking_strategies_docs.py` | **Documentation only** — a self-contained version of each function (own imports, own constants inlined) that the blog embeds section-by-section, so a copy-pasted block never assumes context from elsewhere in the file. Not imported by anything, not run as a script. If you change an algorithm above, mirror the change here — the two are not kept in sync automatically. |
 | `llm.py` | Genie adapters for `agentic` — Anthropic/Ollama adapters implementing Chonkie's `BaseGenie` interface, plus Chonkie's own `OpenAIGenie` |
 | `download_data.py` | Fetches the same sample PDF used in `naive-rag/` |
