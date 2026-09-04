@@ -95,7 +95,10 @@ def fixed_size_chunk(text: str, chunk_size: int = 512, overlap: int = 50) -> lis
     while start < len(text):
         chunks.append(text[start:start + chunk_size])
         start += chunk_size - overlap
-    return [c.strip() for c in chunks if c.strip()]
+    # Filter out whitespace-only chunks, but don't rewrite the ones we keep —
+    # stripping each chunk independently would trim differing amounts of
+    # whitespace off each edge and shift the overlap alignment between them.
+    return [c for c in chunks if c.strip()]
 # --8<-- [end:fixed_size]
 
 
@@ -145,7 +148,7 @@ def recursive_chunk(
         combined = (carry + c) if carry else c
         chunks.append(combined)
         carry = combined[-overlap:] if overlap else ""
-    return [c.strip() for c in chunks if c.strip()]
+    return [c for c in chunks if c.strip()]
 # --8<-- [end:recursive]
 
 
@@ -425,6 +428,13 @@ def run(strategy: str, threshold: float = 0.6) -> None:
     for i, c in enumerate(chunks[:3]):
         print(f"--- chunk {i} ({len(c)} chars) ---")
         print(c[:300])
+        print()
+
+    if strategy in ("fixed_size", "recursive") and len(chunks) >= 2:
+        overlap_size = 50  # matches the default `overlap` these two strategies use
+        print(f"--- overlap check: end of chunk 0 vs. start of chunk 1 (last/first {overlap_size} chars) ---")
+        print("chunk 0 tail:", repr(chunks[0][-overlap_size:]))
+        print("chunk 1 head:", repr(chunks[1][:overlap_size]))
         print()
 
 
