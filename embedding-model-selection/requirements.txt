@@ -12,3 +12,4 @@ FlagEmbedding>=1.3        # BGE-M3 (dense + sparse + multi-vector in one model)
 # Qwen3-Embedding and BGE-M3 both need these for their tokenizers.
 sentencepiece>=0.2
 protobuf>=4.25
+einops>=0.7           # required by nomic-embed-text-v1.5's custom modeling code
