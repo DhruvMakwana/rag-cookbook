@@ -9,6 +9,7 @@ Runnable, from-scratch implementations of the techniques covered in [RAG, Deep D
 | [`naive-rag/`](naive-rag/) | PDF → chunk → embed → FAISS → retrieve → generate, pluggable across Anthropic/OpenAI/Ollama | ✅ |
 | [`chunking-strategies/`](chunking-strategies/) | 10 chunking strategies from scratch — fixed-size through late chunking, proposition chunking, and adaptive strategy selection | ✅ |
 | [`embedding-model-selection/`](embedding-model-selection/) | 5 demos measuring Recall@k on a real eval set — mismatched models, Matryoshka truncation, quantization, instruction prefixes, BGE-M3's dense+sparse+multi-vector | ✅ |
+| [`retrieval-methods/`](retrieval-methods/) | 6 retrieval methods — MMR diversification, self-query metadata filtering, hypothetical questions, hierarchical retrieval, RAPTOR, adaptive retrieval (simplified FLARE) | ✅ |
 
 More recipes land alongside new pages on the blog — hybrid search + RRF, a prompted Self-RAG loop, CRAG with web-search fallback, and others are planned next.
 

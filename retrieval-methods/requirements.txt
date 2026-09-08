@@ -1,0 +1,16 @@
+# Core
+pypdf>=4.0
+numpy>=1.26
+requests>=2.31
+python-dotenv>=1.0
+langchain-text-splitters>=0.3
+langchain-core>=0.3       # maximal_marginal_relevance utility (MMR)
+scikit-learn>=1.4         # KMeans clustering for RAPTOR
+
+# Embeddings — fully local, no API key for mmr/hierarchical
+sentence-transformers>=3.0
+
+# LLM providers — used by self_query, hypothetical_questions, raptor, adaptive.
+# Install whichever you plan to use (see .env.example). Ollama needs no SDK.
+anthropic>=0.34
+openai>=1.40
