@@ -1,10 +1,11 @@
 """
 Six pre-retrieval query transformation techniques, each demonstrated as a
 live before/after: naive retrieval on the raw query, vs. retrieval after
-the technique is applied, against the same sample document and the same
-8-question Recall@k eval set used in chunking-strategies/ and
-embedding-model-selection/ (keywords verified against the real paper
-text there — reused here, not re-invented).
+the technique is applied — against the same sample document, but with
+its own scenario matched to that technique's actual "when to use" case
+(see SCENARIOS below), not one shared generic question set. A vague,
+colloquial query for query rewriting; a broad multi-faceted question for
+multi-query/RAG-Fusion; a numeric-fact question for HyDE; and so on.
 
 All 6 need an LLM key — query transformation is inherently LLM-driven.
 
@@ -38,7 +39,10 @@ RRF_K = 60  # standard damping constant for Reciprocal Rank Fusion
 
 # Same 8 question/keyword pairs used in chunking-strategies/ and
 # embedding-model-selection/ — keywords verified against the real
-# "Attention Is All You Need" text there.
+# "Attention Is All You Need" text there. Kept as a general-purpose
+# baseline (e.g. to show the corpus-cleanup effect on Recall@k), but no
+# longer used to demo any single technique — each technique below gets
+# its own scenario matched to its actual "when to use" case instead.
 EVAL_SET = [
     {"question": "How many attention heads did they use?", "keyword": "h = 8"},
     {"question": "What is the model's embedding dimension?", "keyword": "dmodel = 512"},
@@ -49,6 +53,38 @@ EVAL_SET = [
     {"question": "How long did the base model train for?", "keyword": "12 hours"},
     {"question": "What dropout rate did they use?", "keyword": "Pdrop = 0.1"},
 ]
+
+# One scenario per technique, each built to match that technique's own
+# documented "when to use" case (not the generic EVAL_SET above) — see
+# each technique's blog section for why this particular query is a good
+# fit. Keywords verified present verbatim in the actual paper text.
+SCENARIOS = {
+    "rewrite": {
+        "question": "why dont they just use RNNs like everyone else did before",
+        "keyword": "precludes parallelization",
+        "k": 3,
+    },
+    "multi_query": {
+        "question": "What lets this model connect words that are far apart in a sentence without losing track over long distances?",
+        "keyword": "maximum path length",
+        "k": 5,
+    },
+    "hyde": {
+        "question": "What BLEU score did they get on English-to-German translation?",
+        "keyword": "28.4",
+        "k": 1,
+    },
+    "step_back": {
+        "question": "What value did they use for Pdrop during training?",
+        "keyword": "Pdrop",
+        "k": 3,
+    },
+    "decompose": {
+        "question": "What optimizer did they use, and how many attention heads did they use?",
+        "keywords": ["Adam", "h = 8"],
+        "k": 6,
+    },
+}
 
 
 # ======================================================================
@@ -64,13 +100,23 @@ def load_environment() -> None:
 
 
 def load_sample_text() -> str:
+    """Loads the sample PDF's text, with the front-matter boilerplate
+    (permission notice + the 7-author name/affiliation/email block)
+    trimmed off. That block is single-newline-separated with no real
+    paragraph structure for recursive splitting to respect, and none of
+    the questions on this page are about authorship — keeping it in
+    only adds noisy, low-signal chunks competing for retrieval slots
+    that are relevant to nothing being asked here."""
     from pypdf import PdfReader
 
     pdf_path = DEFAULT_PDF_PATH
     if not pdf_path.exists():
         pdf_path = download_sample_pdf()
     reader = PdfReader(str(pdf_path))
-    return "\n\n".join(page.extract_text() or "" for page in reader.pages)
+    full_text = "\n\n".join(page.extract_text() or "" for page in reader.pages)
+
+    abstract_start = full_text.find("Abstract")
+    return full_text[abstract_start:] if abstract_start != -1 else full_text
 
 
 def chunk_sample_text(chunk_size: int = 500, overlap: int = 50) -> list[str]:
@@ -325,11 +371,20 @@ def run(technique: str, provider: str | None = None) -> None:
         "decompose": lambda q, c, m, k: decompose_retrieve(q, c, m, k, provider=provider),
     }
 
-    naive_score = recall_at_k(chunks, embed_model, naive_retrieve, k=3)
-    technique_score = recall_at_k(chunks, embed_model, retrieve_fns[technique], k=3)
+    scenario = SCENARIOS[technique]
+    question, k = scenario["question"], scenario["k"]
+    keywords = scenario.get("keywords") or [scenario["keyword"]]
 
-    print(f"Naive retrieval:        Recall@3 = {naive_score:.2f}")
-    print(f"{technique:>20}: Recall@3 = {technique_score:.2f}")
+    naive_hits = naive_retrieve(question, chunks, embed_model, k)
+    technique_hits = retrieve_fns[technique](question, chunks, embed_model, k)
+    naive_text = " ".join(naive_hits)
+    technique_text = " ".join(technique_hits)
+
+    print(f"Question: {question}\n")
+    for kw in keywords:
+        found_naive = kw in naive_text
+        found_technique = kw in technique_text
+        print(f'"{kw}" found — naive: {found_naive}, {technique}: {found_technique}')
 
 
 if __name__ == "__main__":
