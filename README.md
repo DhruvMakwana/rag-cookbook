@@ -12,6 +12,7 @@ Runnable, from-scratch implementations of the techniques covered in [RAG, Deep D
 | [`retrieval-methods/`](retrieval-methods/) | 6 retrieval methods — MMR diversification, self-query metadata filtering, hypothetical questions, hierarchical retrieval, RAPTOR, adaptive retrieval (simplified FLARE) | ✅ |
 | [`query-transformation/`](query-transformation/) | 6 pre-retrieval techniques — query rewriting, multi-query/RAG-Fusion, HyDE, step-back prompting, decomposition, IRCoT — each measured before/after, several with genuinely surprising (including negative) results | ✅ |
 | [`post-retrieval/`](post-retrieval/) | 3 post-retrieval techniques — cross-encoder reranking, contextual compression, LLM-based listwise reranking (RankGPT-style) — measured before/after, plus a real latency comparison between cross-encoder and listwise reranking | ✅ |
+| [`adaptive-rag/`](adaptive-rag/) | An LLM router classifies each query and applies only the matching pre-retrieval technique, then cross-encoder reranks — ties `query-transformation/` and `post-retrieval/` together into one pipeline, with an honest finding that reranking can undo an earlier stage's fix on 2 of 5 demo queries | ✅ |
 
 More recipes land alongside new pages on the blog — hybrid search + RRF, a prompted Self-RAG loop, CRAG with web-search fallback, and others are planned next.
 
