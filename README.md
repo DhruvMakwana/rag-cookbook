@@ -11,6 +11,7 @@ Runnable, from-scratch implementations of the techniques covered in [RAG, Deep D
 | [`embedding-model-selection/`](embedding-model-selection/) | 5 demos measuring Recall@k on a real eval set — mismatched models, Matryoshka truncation, quantization, instruction prefixes, BGE-M3's dense+sparse+multi-vector | ✅ |
 | [`retrieval-methods/`](retrieval-methods/) | 6 retrieval methods — MMR diversification, self-query metadata filtering, hypothetical questions, hierarchical retrieval, RAPTOR, adaptive retrieval (simplified FLARE) | ✅ |
 | [`query-transformation/`](query-transformation/) | 6 pre-retrieval techniques — query rewriting, multi-query/RAG-Fusion, HyDE, step-back prompting, decomposition, IRCoT — each measured before/after, several with genuinely surprising (including negative) results | ✅ |
+| [`post-retrieval/`](post-retrieval/) | 3 post-retrieval techniques — cross-encoder reranking, contextual compression, LLM-based listwise reranking (RankGPT-style) — measured before/after, plus a real latency comparison between cross-encoder and listwise reranking | ✅ |
 
 More recipes land alongside new pages on the blog — hybrid search + RRF, a prompted Self-RAG loop, CRAG with web-search fallback, and others are planned next.
 
