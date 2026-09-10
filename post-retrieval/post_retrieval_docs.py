@@ -78,9 +78,12 @@ Question: {query}
 Passages:
 {numbered_passages}
 
-Return ONLY a comma-separated list of passage numbers, ordered from \
-MOST to LEAST relevant. Example: 3,1,4,2. Include every number exactly \
-once. Nothing else."""
+Think through which passages are most relevant if you like. When you \
+are done, output your final ranking as passage numbers from MOST to \
+LEAST relevant, wrapped in <ranking></ranking> tags, with numbers \
+separated by commas and every number included exactly once.
+
+Example: <ranking>3,1,4,2</ranking>"""
 
 
 def llm_listwise_rerank(question: str, candidates: list[str], top_n: int = 3, provider: str | None = None) -> list[str]:
@@ -91,27 +94,30 @@ def llm_listwise_rerank(question: str, candidates: list[str], top_n: int = 3, pr
     each other, not just each one in isolation. Costs one LLM call for
     the whole list instead of one lightweight forward pass per
     candidate, and typically has much higher latency than a
-    cross-encoder for a comparable-size candidate set."""
+    cross-encoder for a comparable-size candidate set.
+
+    An earlier version of this prompt instructed the model to "return
+    ONLY the list, nothing else" — the model routinely ignored that and
+    explained its reasoning first, and a parser trusting the whole
+    response to be just numbers picked up stray digits from that prose
+    ("Table 1", "[4]") and silently corrupted the ranking. Fighting a
+    model's tendency to explain itself is a losing battle; instead this
+    prompt lets it reason freely and asks it to wrap ONLY the final
+    answer in an unambiguous <ranking> tag — trivial to extract
+    correctly regardless of how much reasoning precedes it."""
     numbered = "\n".join(f"[{i + 1}] {c}" for i, c in enumerate(candidates))
     response = llm.generate(
         LISTWISE_PROMPT.format(query=question, numbered_passages=numbered), provider=provider
     ).strip()
+    match = re.search(r"<ranking>(.*?)</ranking>", response, re.S)
 
-    # Models routinely ignore "return ONLY the list" and add reasoning
-    # prose first — naively splitting the whole response on commas picks
-    # up stray digits from that prose (e.g. "Table 1"). The real ranking
-    # is the one line that's ENTIRELY a comma-separated run of numbers,
-    # so search for that pattern specifically rather than trust the
-    # instruction was followed.
     order = []
-    for line in reversed(response.splitlines()):
-        line = line.strip()
-        if re.fullmatch(r"[\d,\s]+", line) and "," in line:
-            for tok in line.replace(" ", "").split(","):
+    if match:
+        for tok in match.group(1).replace(" ", "").split(","):
+            if tok.isdigit():
                 idx = int(tok) - 1
                 if 0 <= idx < len(candidates) and idx not in order:
                     order.append(idx)
-            break
     for i in range(len(candidates)):
         if i not in order:
             order.append(i)
