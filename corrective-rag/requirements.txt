@@ -1,0 +1,18 @@
+# Core
+pypdf>=4.0
+numpy>=1.26
+requests>=2.31
+python-dotenv>=1.0
+langchain-text-splitters>=0.3
+
+# Embeddings — fully local, no API key
+sentence-transformers>=3.0
+
+# LLM providers — the evaluator, query rewriting, and generation all
+# need one. Install whichever you plan to use (see .env.example).
+anthropic>=0.34
+openai>=1.40
+
+# Web search fallback (the "Incorrect" branch) — free tier available,
+# no credit card: https://tavily.com
+tavily-python>=0.5
