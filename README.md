@@ -16,6 +16,7 @@ Runnable, from-scratch implementations of the techniques covered in [RAG, Deep D
 | [`self-rag/`](self-rag/) | A prompted Self-RAG loop — grade relevance, generate, grade groundedness (via a local NLI model, not an LLM call), grade usefulness, retry or fall back honestly. Includes a genuine finding that Claude Sonnet 5 is remarkably resistant to hallucinating in this setup | ✅ |
 | [`corrective-rag/`](corrective-rag/) | A batched retrieval evaluator grades the whole candidate set at once (Correct / Incorrect / Ambiguous), each verdict triggering a genuinely different corrective action — knowledge refinement, a real Tavily web-search fallback, or both. Verified against all 3 verdicts with real, live data | ✅ |
 | [`graph-rag/`](graph-rag/) | Extract entities/relationships per chunk into a knowledge graph (networkx), detect communities (Louvain), summarize each — then local search (entity-link + traverse) and global search (map-reduce over community summaries). Both verified as genuine wins over naive retrieval, with real extraction-cost numbers reported honestly | ✅ |
+| [`agentic-rag/`](agentic-rag/) | An LLM agent picks its own retrieval tool at runtime via Anthropic's native tool-calling API (not a hand-rolled router) — naive search, graph local search, graph global search, or a real Tavily web search fallback. Verified correct on all 4 question types, unprompted | ✅ |
 
 More recipes land alongside new pages on the blog — hybrid search + RRF, and others are planned next.
 

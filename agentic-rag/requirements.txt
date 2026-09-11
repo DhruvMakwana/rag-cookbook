@@ -1,0 +1,17 @@
+# Core
+pypdf>=4.0
+numpy>=1.26
+requests>=2.31
+python-dotenv>=1.0
+langchain-text-splitters>=0.3
+
+# Embeddings + graph — fully local, no API key
+sentence-transformers>=3.0
+networkx>=3.0
+
+# The agent loop uses Anthropic's native tool-calling API directly —
+# this recipe is Anthropic-only (see .env.example for why).
+anthropic>=0.34
+
+# web_search tool — free tier available, no credit card: https://tavily.com
+tavily-python>=0.5
