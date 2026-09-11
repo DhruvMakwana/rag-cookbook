@@ -33,6 +33,12 @@ python post_retrieval.py --technique compression
 python post_retrieval.py --technique listwise
 ```
 
+Override the LLM provider per-call with `--provider` (`anthropic`, `openai`, or `ollama`) instead of changing `.env` — has no effect on `cross_encoder`, which is fully local:
+
+```bash
+python post_retrieval.py --technique compression --provider openai
+```
+
 ## A note on reproducibility
 
 `compression` and `listwise` both make live, unseeded LLM calls, so exact wording (and occasionally the exact True/False outcome) can vary slightly run to run. `cross_encoder` is fully deterministic — same model, same input, same output every time.

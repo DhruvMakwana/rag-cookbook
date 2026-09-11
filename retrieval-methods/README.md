@@ -36,6 +36,12 @@ python retrieval_methods.py --method raptor
 python retrieval_methods.py --method adaptive --threshold 4   # compare with --threshold 3
 ```
 
+Override the LLM provider per-call with `--provider` (`anthropic`, `openai`, or `ollama`) instead of changing `.env`:
+
+```bash
+python retrieval_methods.py --method mmr --provider openai
+```
+
 ## A real finding worth knowing before you trust `adaptive`
 
 `--method adaptive --threshold 3` reproduces a real failure: asked "what's the exact FLOPS count for training the big Transformer model," the model self-reports confidence 3, the (too-permissive) threshold lets it through, and it confidently states **3.3×10¹⁸ FLOPs** — which is actually the paper's figure for the *base* model, not the *big* one (the real answer is 2.3×10¹⁹, a full order of magnitude higher). `--threshold 4` catches this and correctly falls back to retrieval instead of shipping the wrong number — though even then, plain top-1 dense retrieval alone doesn't find the actual table row either (a numeric table row embeds poorly with a general-purpose dense model), so it honestly reports "not found in context" rather than hallucinating. See the blog page for the full story.

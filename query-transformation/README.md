@@ -40,6 +40,12 @@ python query_transformation.py --technique decompose
 python query_transformation.py --technique ircot
 ```
 
+Override the LLM provider per-call with `--provider` (`anthropic`, `openai`, or `ollama`) instead of changing `.env`:
+
+```bash
+python query_transformation.py --technique rewrite --provider openai
+```
+
 ## A note on reproducibility
 
 Every technique here makes at least one live LLM call with no fixed seed, so **exact wording (and occasionally the exact Recall@k number) will vary slightly run to run** — this is real, not a bug to "fix." Multiple runs during development showed the overall pattern (which techniques help, tie, or hurt on this corpus) staying consistent, even when specific numbers shifted by one hit out of eight.

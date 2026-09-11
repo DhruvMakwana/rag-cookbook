@@ -41,6 +41,12 @@ cp .env.example .env
 python self_rag.py --query "What optimizer did they use for training?"
 ```
 
+Override the LLM provider per-call with `--provider` (`anthropic`, `openai`, or `ollama`) instead of changing `.env` — has no effect on the groundedness check, which is fully local:
+
+```bash
+python self_rag.py --query "..." --provider openai
+```
+
 ## Files
 
 | File | Role |

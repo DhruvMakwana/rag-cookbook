@@ -44,6 +44,12 @@ python adaptive_rag.py --compare              # the 5-query table above
 python adaptive_rag.py --query "..." --compress   # add contextual compression as a final step
 ```
 
+Override the LLM provider per-call with `--provider` (`anthropic`, `openai`, or `ollama`) instead of changing `.env`:
+
+```bash
+python adaptive_rag.py --query "..." --provider openai
+```
+
 ## A note on reproducibility
 
 The router and most pre-retrieval techniques make live, unseeded LLM calls, so exact wording can vary run to run. The CLEAR/VAGUE/COMPOUND/BROAD/NEEDS_CONTEXT pattern in the comparison table was verified stable across repeated runs, but individual chunk rankings near a decision boundary can shift slightly.
