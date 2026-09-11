@@ -1,0 +1,16 @@
+# Core
+pypdf>=4.0
+numpy>=1.26
+requests>=2.31
+python-dotenv>=1.0
+langchain-text-splitters>=0.3
+
+# Embeddings (retrieval) + NLI cross-encoder (groundedness check) —
+# both fully local, no API key
+sentence-transformers>=3.0
+
+# LLM providers — relevance grading, generation, and usefulness grading
+# all need one. Install whichever you plan to use (see .env.example).
+# Ollama needs no SDK.
+anthropic>=0.34
+openai>=1.40
