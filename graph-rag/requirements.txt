@@ -1,0 +1,19 @@
+# Core
+pypdf>=4.0
+numpy>=1.26
+requests>=2.31
+python-dotenv>=1.0
+langchain-text-splitters>=0.3
+
+# Embeddings (entity deduplication + naive-retrieval baseline) — fully
+# local, no API key
+sentence-transformers>=3.0
+
+# Graph construction, storage, and community detection — in-process,
+# no graph database server needed
+networkx>=3.0
+
+# LLM providers — entity/relationship extraction, community
+# summarization, and generation all need one.
+anthropic>=0.34
+openai>=1.40

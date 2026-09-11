@@ -15,6 +15,7 @@ Runnable, from-scratch implementations of the techniques covered in [RAG, Deep D
 | [`adaptive-rag/`](adaptive-rag/) | An LLM router classifies each query and applies only the matching pre-retrieval technique, then cross-encoder reranks — ties `query-transformation/` and `post-retrieval/` together into one pipeline, with an honest finding that reranking can undo an earlier stage's fix on 2 of 5 demo queries | ✅ |
 | [`self-rag/`](self-rag/) | A prompted Self-RAG loop — grade relevance, generate, grade groundedness (via a local NLI model, not an LLM call), grade usefulness, retry or fall back honestly. Includes a genuine finding that Claude Sonnet 5 is remarkably resistant to hallucinating in this setup | ✅ |
 | [`corrective-rag/`](corrective-rag/) | A batched retrieval evaluator grades the whole candidate set at once (Correct / Incorrect / Ambiguous), each verdict triggering a genuinely different corrective action — knowledge refinement, a real Tavily web-search fallback, or both. Verified against all 3 verdicts with real, live data | ✅ |
+| [`graph-rag/`](graph-rag/) | Extract entities/relationships per chunk into a knowledge graph (networkx), detect communities (Louvain), summarize each — then local search (entity-link + traverse) and global search (map-reduce over community summaries). Both verified as genuine wins over naive retrieval, with real extraction-cost numbers reported honestly | ✅ |
 
 More recipes land alongside new pages on the blog — hybrid search + RRF, and others are planned next.
 
