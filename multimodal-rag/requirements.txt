@@ -1,0 +1,15 @@
+# Core
+pypdf[image]>=4.0
+numpy>=1.26
+requests>=2.31
+python-dotenv>=1.0
+langchain-text-splitters>=0.3
+pillow>=10.0
+
+# Embeddings — CLIP (shared text+image space) and a dedicated text
+# embedder, both via sentence-transformers, fully local
+sentence-transformers>=3.0
+
+# LLM providers — only needed for the final generation step
+anthropic>=0.34
+openai>=1.40
