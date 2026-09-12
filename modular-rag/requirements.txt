@@ -1,0 +1,12 @@
+# Core
+pypdf>=4.0
+numpy>=1.26
+requests>=2.31
+python-dotenv>=1.0
+
+# Embeddings — fully local, no API key
+sentence-transformers>=3.0
+
+# LLM providers — needed only for the LLM-based router
+anthropic>=0.34
+openai>=1.40
