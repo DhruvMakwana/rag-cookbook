@@ -155,7 +155,22 @@ def reciprocal_rank_fusion(ranked_lists: list[list], k: int = 60) -> list:
     repo — rank-based, not raw-score-based, which matters here since
     CLIP's image-similarity scores and the text embedder's
     similarity scores come from two different, uncalibrated spaces
-    and can't be compared directly."""
+    and can't be compared directly.
+
+    A real, non-obvious consequence: EVERY query produces an exact
+    tie at rank 0 between modalities — `1/(k+0+1)` is identical
+    whether a text chunk or an image sits in that slot, regardless of
+    how relevant either actually is. This isn't a bug to patch with a
+    tiebreaker (a first attempt at one — normalizing each candidate's
+    raw similarity within its own list — didn't work: the top item in
+    ANY list normalizes to exactly 1.0 by construction, so the tie
+    persists no matter what). It's a real, structural property of
+    rank-based fusion: RRF is a CONSENSUS mechanism, not a magnitude
+    comparator, and it has no principled way to let one modality's
+    confident top pick outright beat another modality's merely-present
+    top pick. See multimodal_rag.py's `unified_search` for how to get
+    a genuine image-only result instead — a single flat ranking has
+    no second list to tie against."""
     scores: dict = {}
     for ranked in ranked_lists:
         for rank, item in enumerate(ranked):

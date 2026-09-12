@@ -76,6 +76,15 @@ from sentence_transformers import SentenceTransformer
 # threshold was added). A minimum similarity floor fixes it: don't
 # let a modality contribute to fusion at all if its best candidate
 # doesn't clear a real relevance bar.
+#
+# A second, deeper property this surfaced: even with the floor in
+# place, RRF still produces an exact tie at rank 0 between modalities
+# on every query (1/(k+0+1) is identical for a text chunk or an image
+# in that slot) — a structural fact about rank-based fusion, not
+# something a tiebreaker can fix, since the top item in any list
+# normalizes to the same value by construction. RRF is a consensus
+# mechanism, not a magnitude comparator; see unified_search elsewhere
+# in this file for how to get a genuine image-only result instead.
 CLIP_RELEVANCE_THRESHOLD = 0.28
 
 
@@ -94,6 +103,26 @@ def build_separate_indexes(chunks: list[str], images: dict, text_model: Sentence
 
 
 def reciprocal_rank_fusion(ranked_lists: list[list], k: int = 60) -> list:
+    """Same RRF used for multi-query/RAG-Fusion elsewhere in this
+    repo — rank-based, not raw-score-based, which matters here since
+    CLIP's image-similarity scores and the text embedder's
+    similarity scores come from two different, uncalibrated spaces
+    and can't be compared directly.
+
+    A real, non-obvious consequence: EVERY query produces an exact
+    tie at rank 0 between modalities — `1/(k+0+1)` is identical
+    whether a text chunk or an image sits in that slot, regardless of
+    how relevant either actually is. This isn't a bug to patch with a
+    tiebreaker (a first attempt at one — normalizing each candidate's
+    raw similarity within its own list — didn't work: the top item in
+    ANY list normalizes to exactly 1.0 by construction, so the tie
+    persists no matter what). It's a real, structural property of
+    rank-based fusion: RRF is a CONSENSUS mechanism, not a magnitude
+    comparator, and it has no principled way to let one modality's
+    confident top pick outright beat another modality's merely-present
+    top pick. See `unified_search` above for how to get a genuine
+    image-only result instead — a single flat ranking has no second
+    list to tie against."""
     scores: dict = {}
     for ranked in ranked_lists:
         for rank, item in enumerate(ranked):
