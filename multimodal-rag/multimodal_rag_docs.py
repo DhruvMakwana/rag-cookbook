@@ -33,18 +33,58 @@ def extract_images_from_pdf(pdf_path: str) -> dict[str, Image.Image]:
 # --8<-- [end:extraction]
 
 
+# --8<-- [start:multimodal_encoder]
+import numpy as np
+from PIL import Image
+
+# jina-clip-v2, not base CLIP — measured directly against base CLIP
+# (clip-ViT-B-32) and SigLIP (google/siglip-base-patch16-224) before
+# picking this one. Base CLIP scored 0.375 Recall@3 on this recipe's
+# 8-question text eval set; SigLIP scored worse still, 0.25.
+# jina-clip-v2 scored 0.75 — a real, substantial improvement, with the
+# same image-matching accuracy as base CLIP (2/4 on this recipe's test
+# queries) and much better-separated confidence scores for irrelevant
+# queries. Needs `transformers==4.46.3` pinned — a newer transformers
+# breaks its custom modeling code (`clip_loss` was removed from
+# `transformers.models.clip.modeling_clip`, which this model's remote
+# code still imports) — and `trust_remote_code=True`, since it ships
+# custom model code from Jina AI's HuggingFace repo.
+CLIP_MODEL_NAME = "jinaai/jina-clip-v2"
+
+
+class MultimodalEncoder:
+    """Wraps jina-clip-v2's AutoModel behind the same simple
+    `.encode(...)` interface SentenceTransformer models use elsewhere
+    in this repo. jina-clip-v2's own sentence-transformers integration
+    didn't route PIL images correctly in testing (raised "Modality
+    'image' is not supported"); its documented `AutoModel.encode_text`
+    / `encode_image` methods are used directly here instead."""
+
+    def __init__(self, model_name: str = CLIP_MODEL_NAME) -> None:
+        from transformers import AutoModel
+
+        self._model = AutoModel.from_pretrained(model_name, trust_remote_code=True)
+
+    def encode(self, inputs, convert_to_numpy: bool = True, show_progress_bar: bool = False) -> np.ndarray:
+        single = isinstance(inputs, (str, Image.Image))
+        items = [inputs] if single else list(inputs)
+        embeddings = self._model.encode_image(items) if items and isinstance(items[0], Image.Image) else self._model.encode_text(items)
+        return embeddings[0] if single else embeddings
+# --8<-- [end:multimodal_encoder]
+
+
 # --8<-- [start:unified]
 import numpy as np
-from sentence_transformers import SentenceTransformer
 
 
-def build_unified_index(chunks: list[str], images: dict, clip_model: SentenceTransformer) -> dict:
+def build_unified_index(chunks: list[str], images: dict, clip_model) -> dict:
     """Everything — text chunks AND images — embedded into ONE shared
-    CLIP space. Enables genuine cross-modal search (a text query can
-    directly retrieve an image), at a real cost: CLIP's text encoder
-    is a much weaker text retriever than a dedicated text embedding
-    model (measured: ~1.00 -> ~0.38 Recall@3 on the same 8 factual
-    questions, same corpus — see multimodal_rag.py's
+    CLIP-family space. Enables genuine cross-modal search (a text
+    query can directly retrieve an image), at a real cost: even
+    jina-clip-v2 (see multimodal_encoder above), the strongest of 3
+    text+image models tested, is still a weaker text retriever than a
+    dedicated text embedding model (measured: 1.00 -> 0.75 Recall@3 on
+    the same 8 factual questions, same corpus — see multimodal_rag.py's
     --compare-text-quality)."""
     text_embs = clip_model.encode(chunks, convert_to_numpy=True, show_progress_bar=False)
     image_names = list(images.keys())
@@ -52,7 +92,7 @@ def build_unified_index(chunks: list[str], images: dict, clip_model: SentenceTra
     return {"chunks": chunks, "chunk_embs": text_embs, "image_names": image_names, "image_embs": image_embs}
 
 
-def unified_search(query: str, index: dict, clip_model: SentenceTransformer, k: int = 3) -> list[tuple[str, str]]:
+def unified_search(query: str, index: dict, clip_model, k: int = 3) -> list[tuple[str, str]]:
     query_vec = clip_model.encode(query, convert_to_numpy=True)
     candidates = [("text", c) for c in index["chunks"]] + [("image", n) for n in index["image_names"]]
     all_embs = np.vstack([index["chunk_embs"], index["image_embs"]])
@@ -70,12 +110,12 @@ from sentence_transformers import SentenceTransformer
 # a list. With a small image pool, whichever image scores even
 # marginally highest still becomes "rank 1" and earns a real fusion
 # boost, even when every image is genuinely irrelevant to the query
-# (verified directly: all 3 images scored ~0.22-0.23 — noise, not
-# signal — for a plain-text question, and the highest of the three
-# still got fused ahead of a relevant text chunk, before this
-# threshold was added). A minimum similarity floor fixes it: don't
-# let a modality contribute to fusion at all if its best candidate
-# doesn't clear a real relevance bar.
+# (verified directly: all 3 images scored well below this threshold —
+# noise, not signal — for a plain-text question, and without a floor
+# the highest of the three would still get fused ahead of a relevant
+# text chunk). A minimum similarity floor fixes it: don't let a
+# modality contribute to fusion at all if its best candidate doesn't
+# clear a real relevance bar.
 #
 # A second, deeper property this surfaced: even with the floor in
 # place, RRF still produces an exact tie at rank 0 between modalities
@@ -88,12 +128,13 @@ from sentence_transformers import SentenceTransformer
 CLIP_RELEVANCE_THRESHOLD = 0.28
 
 
-def build_separate_indexes(chunks: list[str], images: dict, text_model: SentenceTransformer, clip_model: SentenceTransformer) -> dict:
+def build_separate_indexes(chunks: list[str], images: dict, text_model: SentenceTransformer, clip_model) -> dict:
     """Text goes through a DEDICATED text embedder (full retrieval
-    quality preserved); images go through CLIP (the only place CLIP
-    is actually needed). Two separate, uncalibrated embedding spaces —
-    which is exactly why fusion below uses RRF (rank-based) rather
-    than comparing raw similarity scores directly."""
+    quality preserved); images go through the CLIP-family model (the
+    only place it's actually needed). Two separate, uncalibrated
+    embedding spaces — which is exactly why fusion below uses RRF
+    (rank-based) rather than comparing raw similarity scores
+    directly."""
     return {
         "chunks": chunks,
         "chunk_embs": text_model.encode(chunks, convert_to_numpy=True, show_progress_bar=False),
@@ -105,9 +146,9 @@ def build_separate_indexes(chunks: list[str], images: dict, text_model: Sentence
 def reciprocal_rank_fusion(ranked_lists: list[list], k: int = 60) -> list:
     """Same RRF used for multi-query/RAG-Fusion elsewhere in this
     repo — rank-based, not raw-score-based, which matters here since
-    CLIP's image-similarity scores and the text embedder's
-    similarity scores come from two different, uncalibrated spaces
-    and can't be compared directly.
+    the CLIP-family model's image-similarity scores and the text
+    embedder's similarity scores come from two different,
+    uncalibrated spaces and can't be compared directly.
 
     A real, non-obvious consequence: EVERY query produces an exact
     tie at rank 0 between modalities — `1/(k+0+1)` is identical
@@ -130,7 +171,7 @@ def reciprocal_rank_fusion(ranked_lists: list[list], k: int = 60) -> list:
     return sorted(scores, key=lambda item: -scores[item])
 
 
-def fused_search(query: str, index: dict, text_model: SentenceTransformer, clip_model: SentenceTransformer, k: int = 3) -> list[tuple[str, str]]:
+def fused_search(query: str, index: dict, text_model: SentenceTransformer, clip_model, k: int = 3) -> list[tuple[str, str]]:
     text_query_vec = text_model.encode(query, convert_to_numpy=True)
     text_sims = [float(np.dot(text_query_vec, v) / (np.linalg.norm(text_query_vec) * np.linalg.norm(v) + 1e-8)) for v in index["chunk_embs"]]
     text_ranked = [("text", index["chunks"][i]) for i in np.argsort(text_sims)[::-1]]

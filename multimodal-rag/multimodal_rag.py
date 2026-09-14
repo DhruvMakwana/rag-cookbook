@@ -37,7 +37,43 @@ from download_data import DEFAULT_PDF_PATH, download_sample_pdf
 # ======================================================================
 
 TEXT_EMBEDDING_MODEL = "all-MiniLM-L6-v2"
-CLIP_MODEL_NAME = "clip-ViT-B-32"
+
+# jina-clip-v2, not base CLIP — measured directly against 2 other
+# candidates before picking this one. Base CLIP (clip-ViT-B-32) scored
+# 0.375 Recall@3 on the same 8-question text eval set below; SigLIP
+# (google/siglip-base-patch16-224) scored worse still, 0.25. jina-clip-v2
+# scored 0.75 — a real, substantial improvement, with the SAME image-
+# matching accuracy as base CLIP (2/4 on the test queries) and much
+# better-separated confidence scores for irrelevant queries. It needs
+# `transformers==4.46.3` pinned (see requirements.txt) — a newer
+# `transformers` breaks its custom modeling code (`clip_loss` was
+# removed from `transformers.models.clip.modeling_clip`, which this
+# model's remote code still imports) — and `trust_remote_code=True`,
+# since it ships custom model code from Jina AI's HuggingFace repo.
+CLIP_MODEL_NAME = "jinaai/jina-clip-v2"
+
+
+class MultimodalEncoder:
+    """Wraps jina-clip-v2's AutoModel behind the same simple
+    `.encode(...)` interface SentenceTransformer models use elsewhere
+    in this repo, so every other function here can stay unchanged and
+    call `.encode()` on text OR images without caring which. jina-clip-v2's
+    own sentence-transformers integration didn't route PIL images
+    correctly in testing (raised "Modality 'image' is not supported");
+    its documented `AutoModel.encode_text` / `encode_image` methods
+    are used directly here instead."""
+
+    def __init__(self, model_name: str = CLIP_MODEL_NAME) -> None:
+        from transformers import AutoModel
+
+        self._model = AutoModel.from_pretrained(model_name, trust_remote_code=True)
+
+    def encode(self, inputs, convert_to_numpy: bool = True, show_progress_bar: bool = False) -> np.ndarray:
+        single = isinstance(inputs, (str, Image.Image))
+        items = [inputs] if single else list(inputs)
+        embeddings = self._model.encode_image(items) if items and isinstance(items[0], Image.Image) else self._model.encode_text(items)
+        return embeddings[0] if single else embeddings
+
 
 # Same 8 question/keyword pairs used across every other recipe in this
 # repo — reused here, not re-invented, to measure text-retrieval
@@ -115,14 +151,14 @@ def extract_images_from_pdf() -> dict[str, Image.Image]:
 # ======================================================================
 
 
-def build_unified_index(chunks: list[str], images: dict[str, Image.Image], clip_model: SentenceTransformer) -> dict:
+def build_unified_index(chunks: list[str], images: dict[str, Image.Image], clip_model: MultimodalEncoder) -> dict:
     text_embs = clip_model.encode(chunks, convert_to_numpy=True, show_progress_bar=False)
     image_names = list(images.keys())
     image_embs = clip_model.encode(list(images.values()), convert_to_numpy=True, show_progress_bar=False)
     return {"chunks": chunks, "chunk_embs": text_embs, "image_names": image_names, "image_embs": image_embs}
 
 
-def unified_search(query: str, index: dict, clip_model: SentenceTransformer, k: int = 3) -> list[tuple[str, str]]:
+def unified_search(query: str, index: dict, clip_model: MultimodalEncoder, k: int = 3) -> list[tuple[str, str]]:
     """Single ranked list mixing text chunks and images — returns
     (kind, content) pairs, kind is 'text' or 'image'."""
     query_vec = clip_model.encode(query, convert_to_numpy=True)
@@ -141,7 +177,7 @@ def unified_search(query: str, index: dict, clip_model: SentenceTransformer, k: 
 # ======================================================================
 
 
-def build_separate_indexes(chunks: list[str], images: dict[str, Image.Image], text_model: SentenceTransformer, clip_model: SentenceTransformer) -> dict:
+def build_separate_indexes(chunks: list[str], images: dict[str, Image.Image], text_model: SentenceTransformer, clip_model: MultimodalEncoder) -> dict:
     return {
         "chunks": chunks,
         "chunk_embs": text_model.encode(chunks, convert_to_numpy=True, show_progress_bar=False),
@@ -191,7 +227,7 @@ def reciprocal_rank_fusion(ranked_lists: list[list], k: int = 60) -> list:
 CLIP_RELEVANCE_THRESHOLD = 0.28
 
 
-def fused_search(query: str, index: dict, text_model: SentenceTransformer, clip_model: SentenceTransformer, k: int = 3) -> list[tuple[str, str]]:
+def fused_search(query: str, index: dict, text_model: SentenceTransformer, clip_model: MultimodalEncoder, k: int = 3) -> list[tuple[str, str]]:
     text_query_vec = text_model.encode(query, convert_to_numpy=True)
     text_sims = [float(np.dot(text_query_vec, v) / (np.linalg.norm(text_query_vec) * np.linalg.norm(v) + 1e-8)) for v in index["chunk_embs"]]
     text_ranked = [("text", index["chunks"][i]) for i in np.argsort(text_sims)[::-1]]
@@ -213,7 +249,7 @@ def fused_search(query: str, index: dict, text_model: SentenceTransformer, clip_
 # ======================================================================
 
 
-def recall_at_k(chunks: list[str], embed_model: SentenceTransformer, k: int = 3) -> float:
+def recall_at_k(chunks: list[str], embed_model: SentenceTransformer | MultimodalEncoder, k: int = 3) -> float:
     chunk_embs = embed_model.encode(chunks, convert_to_numpy=True, show_progress_bar=False)
     hits = 0
     for question, keyword in TEXT_EVAL_SET:
@@ -233,7 +269,7 @@ def run_text_quality_comparison() -> None:
     dedicated_recall = recall_at_k(chunks, text_model)
     print(f"Dedicated text embedder ({TEXT_EMBEDDING_MODEL}) Recall@3: {dedicated_recall:.3f}")
 
-    clip_model = SentenceTransformer(CLIP_MODEL_NAME)
+    clip_model = MultimodalEncoder(CLIP_MODEL_NAME)
     clip_recall = recall_at_k(chunks, clip_model)
     print(f"CLIP's text encoder ({CLIP_MODEL_NAME}) Recall@3: {clip_recall:.3f}")
     print(f"\nUsing CLIP for text retrieval costs {(dedicated_recall - clip_recall) * 100:.0f} points of Recall@3 "
@@ -249,7 +285,7 @@ def run_query(mode: str, question: str, provider: str | None) -> None:
     load_environment()
     chunks = chunk_sample_text()
     images = extract_images_from_pdf()
-    clip_model = SentenceTransformer(CLIP_MODEL_NAME)
+    clip_model = MultimodalEncoder(CLIP_MODEL_NAME)
 
     if mode == "unified":
         index = build_unified_index(chunks, images, clip_model)
