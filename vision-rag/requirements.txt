@@ -1,0 +1,23 @@
+# Vision retrieval — a small ColPali-family model. colpali-engine pulls in
+# torch, transformers, and peft (needed to load LoRA-style adapter
+# checkpoints like this one — see the load_vision_model docstring in
+# vision_rag.py for the specific checkpoint issue it has to work around).
+colpali-engine==0.3.18
+torch>=2.0
+
+# Renders PDF pages to images without needing Poppler installed separately
+# (unlike pdf2image).
+pymupdf>=1.24
+pillow>=10.0
+
+# Naive text RAG baseline — same pattern used across this repo.
+pypdf>=4.0
+sentence-transformers>=3.0
+langchain-text-splitters>=0.2
+
+# Generation
+anthropic>=0.34
+openai>=1.40
+python-dotenv>=1.0
+requests>=2.31
+huggingface_hub>=0.24
