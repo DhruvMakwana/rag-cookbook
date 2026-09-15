@@ -16,6 +16,18 @@ Base CLIP is genuinely old (2021). Before building around it, 2 more recent cand
 
 `jina-clip-v2` is what this recipe actually uses. Getting it running took a real fix, not a shrug: its custom model code imports `clip_loss` from `transformers.models.clip.modeling_clip`, which newer `transformers` versions removed — pin `transformers==4.46.3` (already in `requirements.txt`) and it loads and runs correctly. It also needs `trust_remote_code=True` (it ships custom model code from Jina AI's own HuggingFace repo) and its own `AutoModel.encode_text` / `encode_image` API — its `sentence-transformers` integration didn't correctly route image inputs in testing.
 
+## If you have more memory to spare
+
+`jina-clip-v2` was picked for this recipe because it's the best-measured candidate that still fits an 8GB machine. With more RAM/VRAM available, worth trying instead (check the [MTEB multimodal leaderboard](https://huggingface.co/spaces/mteb/leaderboard) for current standings before committing):
+
+| Model | Access | Notes |
+|---|---|---|
+| `Qwen3-VL-Embedding-8B` | Local, ~16GB+ VRAM recommended | Top of the MTEB multimodal leaderboard at the time of writing; too large to load alongside the rest of this stack on 8GB |
+| Voyage Multimodal 3.5 | API only | No local memory cost regardless of machine specs — swap `MultimodalEncoder` for API calls |
+| Gemini Embedding 2 (multimodal) | API only | Same trade-off as Voyage — no local footprint, but adds network latency and per-call cost |
+
+Swapping in a local model just means pointing `CLIP_MODEL_NAME` at it and updating `MultimodalEncoder` if its API surface differs from `AutoModel.encode_text`/`encode_image` (as `jina-clip-v2` did vs. base CLIP's `SentenceTransformer.encode`). An API-based model needs `MultimodalEncoder.encode` rewritten to call the provider's endpoint instead of a local `transformers` model.
+
 ## The real trade-off, measured
 
 | | Recall@3 on the same 8 factual questions used across this repo |
