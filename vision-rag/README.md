@@ -16,13 +16,13 @@ This specific checkpoint's `adapter_config.json` sets `base_model_name_or_path` 
 
 ## How retrieval works: late interaction (MaxSim), not a single vector
 
-Each page is embedded as a grid of patch vectors (one per image patch, ~1,100 of them for this model), not pooled into one summary vector. A query is embedded the same way, one vector per token. Scoring sums, for every query token, the single best-matching patch anywhere on the page:
+Each page is embedded as a grid of patch vectors, not pooled into one summary vector. Concretely, for this model: a page image is split into a 4×4 grid of 512×512 tiles plus one whole-page thumbnail tile (17 tiles total); each tile is patchified into a 32×32 grid of non-overlapping 16×16px patches (1,024 raw patches/tile), then a 4×4 pixel-shuffle merge reduces that to 8×8 = 64 tokens/tile. 17 × 64 = **1,088 image tokens per page** (verified directly — not a fixed constant of the model, it follows from the page's pixel dimensions). A query is embedded the same way, one vector per token. Scoring sums, for every query token, the single best-matching patch anywhere on the page:
 
 ```
 score(query, page) = Σ (for each query token) max (over all page patches) dot_product
 ```
 
-This is why a page can win on the strength of ONE region — one table cell, one line of a chart legend — even if the rest of the page is unrelated to the query. It's also why the index is heavier than a single-vector embedding: ~1,100 vectors per page here, vs. one per chunk for the naive baseline.
+This is why a page can win on the strength of ONE region — one table cell, one line of a chart legend — even if the rest of the page is unrelated to the query. It's also why the index is heavier than a single-vector embedding: 1,088 vectors per page here, vs. one per chunk for the naive baseline.
 
 ## Measured: Recall@3, naive text RAG vs. Vision RAG
 
