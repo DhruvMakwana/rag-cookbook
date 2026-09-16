@@ -1,0 +1,8 @@
+# Anthropic's prompt caching (cache_control) is the only mechanism this
+# recipe measures -- see README for why (hosted APIs don't expose the raw
+# KV-cache the original CAG paper actually manipulates).
+anthropic>=1.6
+
+pypdf>=4.0
+python-dotenv>=1.0
+requests>=2.31
