@@ -1,0 +1,6 @@
+.venv/
+.env
+__pycache__/
+data/
+.transcript_cache.json
+.frames_cache/

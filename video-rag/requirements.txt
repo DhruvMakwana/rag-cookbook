@@ -1,0 +1,15 @@
+# Speech-to-text. Whisper shells out to the system `ffmpeg` binary to
+# decode audio -- install it separately (e.g. `brew install ffmpeg` on
+# Mac) before running this recipe; it's a real prerequisite, not optional.
+openai-whisper>=20231117
+
+# Frame-side embedding (base CLIP, via sentence-transformers) and
+# transcript-side embedding (a dedicated text embedder) both live here.
+sentence-transformers>=3.0
+pillow>=10.0
+numpy>=1.24
+
+anthropic>=1.6
+openai>=1.40
+python-dotenv>=1.0
+requests>=2.31
