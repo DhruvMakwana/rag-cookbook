@@ -1,0 +1,15 @@
+# PageIndex, local mode -- indexes documents on this machine using your
+# own LLM key (Anthropic here, via the [anthropic] extra which pulls in
+# litellm + the anthropic SDK). No embedding model, no vector DB, no GPU
+# dependency anywhere in this recipe.
+pageindex[anthropic]>=0.2.18
+
+# Naive text RAG baseline for comparison
+sentence-transformers>=3.0
+langchain-text-splitters>=0.2
+pypdf>=4.0
+
+python-dotenv>=1.0
+requests>=2.31
+anthropic>=1.6
+openai>=1.40

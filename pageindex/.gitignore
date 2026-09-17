@@ -1,0 +1,6 @@
+.venv/
+.env
+__pycache__/
+data/
+.pageindex/
+.pageindex_doc_id
