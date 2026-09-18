@@ -189,3 +189,124 @@ def demo_bge_m3_multi_functionality(text: str) -> None:
     print(f"Sparse weights:  top terms = {top_terms}")
     print(f"ColBERT vectors: shape={colbert.shape} (one vector per token)")
 # --8<-- [end:bge_m3]
+
+
+# --8<-- [start:bm25_vs_dense]
+from rank_bm25 import BM25Okapi
+from sentence_transformers import SentenceTransformer
+import numpy as np
+
+
+def demo_bm25_vs_dense() -> None:
+    """BM25 (pure lexical statistics) vs. a dense embedder on a corpus
+    built specifically to expose the gap between them: Doc A is the real
+    answer to "car problems" but shares zero words with the query, while
+    Doc B and Doc F merely contain the literal word "car" without being
+    about car problems."""
+    corpus = [
+        "My automobile has engine trouble",
+        "Car insurance policy renewal",
+        "Best restaurants in the city",
+        "How to bake sourdough bread",
+        "Weather forecast for next week",
+        "Car maintenance schedule and tips",
+    ]
+    labels = ["Doc A", "Doc B", "Doc C", "Doc D", "Doc E", "Doc F"]
+    query = "car problems"
+
+    tokenized_corpus = [doc.lower().split() for doc in corpus]
+    bm25 = BM25Okapi(tokenized_corpus)
+    bm25_scores = bm25.get_scores(query.lower().split())
+
+    model = SentenceTransformer("all-MiniLM-L6-v2")
+    doc_vecs = model.encode(corpus, convert_to_numpy=True, show_progress_bar=False)
+    query_vec = model.encode([query], convert_to_numpy=True, show_progress_bar=False)
+    query_norm = query_vec / np.linalg.norm(query_vec, axis=1, keepdims=True)
+    doc_norm = doc_vecs / np.linalg.norm(doc_vecs, axis=1, keepdims=True)
+    dense_scores = (query_norm @ doc_norm.T)[0]
+
+    print("Document                                    BM25    Dense")
+    for label, doc, bm25_score, dense_score in zip(labels, corpus, bm25_scores, dense_scores):
+        print(f"{label} ({doc:<35s})  {bm25_score:5.3f}   {dense_score:6.3f}")
+# --8<-- [end:bm25_vs_dense]
+
+
+# --8<-- [start:splade]
+from sentence_transformers import SparseEncoder
+
+
+def demo_splade() -> None:
+    """A real SPLADE model predicts vocabulary weights for a passage,
+    including words that never literally appear in it. Shows this
+    directly: "car" gets real weight for Doc A ("my automobile has
+    engine trouble"), despite the word "car" not being in that sentence
+    at all."""
+    corpus = [
+        "My automobile has engine trouble",
+        "Car insurance policy renewal",
+        "Best restaurants in the city",
+        "How to bake sourdough bread",
+        "Weather forecast for next week",
+        "Car maintenance schedule and tips",
+    ]
+    labels = ["Doc A", "Doc B", "Doc C", "Doc D", "Doc E", "Doc F"]
+    query = "car problems"
+
+    model = SparseEncoder("naver/splade-cocondenser-ensembledistil")
+    doc_embeddings = model.encode(corpus)
+    query_embedding = model.encode([query])
+    scores = model.similarity(query_embedding, doc_embeddings)[0]
+
+    for label, score in zip(labels, scores):
+        print(f"{label}: SPLADE score = {score:.3f}")
+
+    doc_a_terms = model.decode(doc_embeddings[0], top_k=8)
+    print(f"\nDoc A's top-weighted vocabulary terms (learned, not literal words in the sentence): {doc_a_terms}")
+# --8<-- [end:splade]
+
+
+# --8<-- [start:hybrid_rrf]
+import numpy as np
+from rank_bm25 import BM25Okapi
+from sentence_transformers import SentenceTransformer
+
+
+def demo_hybrid_fusion() -> None:
+    """Fuses real BM25 and dense scores with Reciprocal Rank Fusion:
+    convert each list's raw scores to RANKS (0 = best), then sum
+    1/(k + rank + 1) across both lists per document — a document ranked
+    highly by either signal gets a real boost, without needing the two
+    scales (BM25 statistics, cosine similarity) to be comparable in
+    magnitude at all."""
+    corpus = [
+        "My automobile has engine trouble",
+        "Car insurance policy renewal",
+        "Best restaurants in the city",
+        "How to bake sourdough bread",
+        "Weather forecast for next week",
+        "Car maintenance schedule and tips",
+    ]
+    labels = ["Doc A", "Doc B", "Doc C", "Doc D", "Doc E", "Doc F"]
+    query = "car problems"
+
+    tokenized_corpus = [doc.lower().split() for doc in corpus]
+    bm25 = BM25Okapi(tokenized_corpus)
+    bm25_scores = bm25.get_scores(query.lower().split())
+
+    model = SentenceTransformer("all-MiniLM-L6-v2")
+    doc_vecs = model.encode(corpus, convert_to_numpy=True, show_progress_bar=False)
+    query_vec = model.encode([query], convert_to_numpy=True, show_progress_bar=False)
+    query_norm = query_vec / np.linalg.norm(query_vec, axis=1, keepdims=True)
+    doc_norm = doc_vecs / np.linalg.norm(doc_vecs, axis=1, keepdims=True)
+    dense_scores = (query_norm @ doc_norm.T)[0]
+
+    k = 60
+    bm25_ranks = np.argsort(np.argsort(-np.array(bm25_scores)))
+    dense_ranks = np.argsort(np.argsort(-np.array(dense_scores)))
+    fused_scores = [1 / (k + bm25_ranks[i] + 1) + 1 / (k + dense_ranks[i] + 1) for i in range(len(corpus))]
+
+    order = np.argsort(-np.array(fused_scores))
+    print("Fused ranking (RRF over real BM25 + real dense scores):")
+    for rank, i in enumerate(order, start=1):
+        print(f"  {rank}. {labels[i]}  fused_score={fused_scores[i]:.5f}")
+# --8<-- [end:hybrid_rrf]

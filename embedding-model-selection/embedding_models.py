@@ -43,6 +43,21 @@ BASELINE_MODEL = "all-MiniLM-L6-v2"
 MISMATCHED_MODEL = "multi-qa-MiniLM-L6-cos-v1"
 MATRYOSHKA_MODEL = "nomic-ai/nomic-embed-text-v1.5"  # 137M params — deliberately small
 HYBRID_MODEL = "BAAI/bge-m3"
+SPLADE_MODEL = "naver/splade-cocondenser-ensembledistil"
+
+# A small, hand-built corpus specifically to expose the vocabulary-mismatch
+# gap between BM25 and dense/learned-sparse retrieval: Doc A is the actual
+# answer to "car problems" but shares zero words with the query.
+BM25_VS_DENSE_CORPUS = [
+    "My automobile has engine trouble",
+    "Car insurance policy renewal",
+    "Best restaurants in the city",
+    "How to bake sourdough bread",
+    "Weather forecast for next week",
+    "Car maintenance schedule and tips",
+]
+BM25_VS_DENSE_LABELS = ["Doc A", "Doc B", "Doc C", "Doc D", "Doc E", "Doc F"]
+BM25_VS_DENSE_QUERY = "car problems"
 
 # nomic-embed-text-v1.5's actual trained convention — not an invented prompt.
 NOMIC_QUERY_PREFIX = "search_query: "
@@ -248,16 +263,110 @@ def demo_bge_m3_multi_functionality(text: str) -> None:
 
 
 # ======================================================================
+# 6. BM25 vs. dense vs. SPLADE, and hybrid fusion via RRF
+# ======================================================================
+# --8<-- [start:bm25_vs_dense]
+def demo_bm25_vs_dense() -> None:
+    """BM25 (pure lexical statistics, `rank_bm25`) vs. a dense embedder
+    (`all-MiniLM-L6-v2`) on a corpus built specifically to expose the gap
+    between them: Doc A is the real answer to "car problems" but shares
+    zero words with the query, while Doc B and Doc F merely contain the
+    literal word "car" without being about car problems."""
+    from rank_bm25 import BM25Okapi
+
+    tokenized_corpus = [doc.lower().split() for doc in BM25_VS_DENSE_CORPUS]
+    bm25 = BM25Okapi(tokenized_corpus)
+    bm25_scores = bm25.get_scores(BM25_VS_DENSE_QUERY.lower().split())
+
+    model = SentenceTransformer(BASELINE_MODEL)
+    doc_vecs = model.encode(BM25_VS_DENSE_CORPUS, convert_to_numpy=True, show_progress_bar=False)
+    query_vec = model.encode([BM25_VS_DENSE_QUERY], convert_to_numpy=True, show_progress_bar=False)
+    dense_scores = cosine_sim_matrix(query_vec, doc_vecs)[0]
+
+    print("Document                                    BM25    Dense")
+    for label, doc, bm25_score, dense_score in zip(BM25_VS_DENSE_LABELS, BM25_VS_DENSE_CORPUS, bm25_scores, dense_scores):
+        print(f"{label} ({doc:<35s})  {bm25_score:5.3f}   {dense_score:6.3f}")
+# --8<-- [end:bm25_vs_dense]
+
+
+# --8<-- [start:splade]
+def demo_splade() -> None:
+    """A real SPLADE model — not the dense/BM25 paradigm of anything else
+    on this page — predicts vocabulary weights for a passage, including
+    words that never literally appear in it. Shows this directly: "car"
+    gets real weight for Doc A ("my automobile has engine trouble"),
+    despite the word "car" not being in that sentence at all."""
+    from sentence_transformers import SparseEncoder
+
+    model = SparseEncoder(SPLADE_MODEL)
+    doc_embeddings = model.encode(BM25_VS_DENSE_CORPUS)
+    query_embedding = model.encode([BM25_VS_DENSE_QUERY])
+    scores = model.similarity(query_embedding, doc_embeddings)[0]
+
+    for label, score in zip(BM25_VS_DENSE_LABELS, scores):
+        print(f"{label}: SPLADE score = {score:.3f}")
+
+    doc_a_terms = model.decode(doc_embeddings[0], top_k=8)
+    print(f"\nDoc A's top-weighted vocabulary terms (learned, not literal words in the sentence): {doc_a_terms}")
+# --8<-- [end:splade]
+
+
+# --8<-- [start:hybrid_rrf]
+def hybrid_rrf_fusion(bm25_scores, dense_scores, k: int = 60) -> list[float]:
+    """Reciprocal Rank Fusion: convert each list's raw scores to RANKS
+    (0 = best), then sum 1/(k + rank + 1) across both lists for each
+    document. A document ranked highly by either signal gets a real
+    boost, without needing the two scales (BM25 statistics, cosine
+    similarity) to be comparable in magnitude at all."""
+    n = len(bm25_scores)
+    bm25_ranks = np.argsort(np.argsort(-np.array(bm25_scores)))
+    dense_ranks = np.argsort(np.argsort(-np.array(dense_scores)))
+    return [1 / (k + bm25_ranks[i] + 1) + 1 / (k + dense_ranks[i] + 1) for i in range(n)]
+
+
+def demo_hybrid_fusion() -> None:
+    """Fuses the same real BM25 and dense scores from `demo_bm25_vs_dense`
+    with RRF, to see whether combining the two signals actually recovers
+    Doc A (the real answer) into a clear top rank."""
+    from rank_bm25 import BM25Okapi
+
+    tokenized_corpus = [doc.lower().split() for doc in BM25_VS_DENSE_CORPUS]
+    bm25 = BM25Okapi(tokenized_corpus)
+    bm25_scores = bm25.get_scores(BM25_VS_DENSE_QUERY.lower().split())
+
+    model = SentenceTransformer(BASELINE_MODEL)
+    doc_vecs = model.encode(BM25_VS_DENSE_CORPUS, convert_to_numpy=True, show_progress_bar=False)
+    query_vec = model.encode([BM25_VS_DENSE_QUERY], convert_to_numpy=True, show_progress_bar=False)
+    dense_scores = cosine_sim_matrix(query_vec, doc_vecs)[0]
+
+    fused_scores = hybrid_rrf_fusion(bm25_scores, dense_scores)
+    order = np.argsort(-np.array(fused_scores))
+    print("Fused ranking (RRF over real BM25 + real dense scores):")
+    for rank, i in enumerate(order, start=1):
+        print(f"  {rank}. {BM25_VS_DENSE_LABELS[i]}  fused_score={fused_scores[i]:.5f}")
+# --8<-- [end:hybrid_rrf]
+
+
+# ======================================================================
 # CLI
 # ======================================================================
 
-DEMOS = ["mismatched", "matryoshka", "quantization", "instruction", "bge_m3"]
+DEMOS = ["mismatched", "matryoshka", "quantization", "instruction", "bge_m3", "bm25_vs_dense", "splade", "hybrid"]
 
 
 def run(demo: str) -> None:
     if demo == "bge_m3":
         text = load_sample_text()[:1500]
         demo_bge_m3_multi_functionality(text)
+        return
+    if demo == "bm25_vs_dense":
+        demo_bm25_vs_dense()
+        return
+    if demo == "splade":
+        demo_splade()
+        return
+    if demo == "hybrid":
+        demo_hybrid_fusion()
         return
 
     chunks = chunk_sample_text()

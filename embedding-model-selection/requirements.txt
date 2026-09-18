@@ -5,9 +5,10 @@ requests>=2.31
 langchain-text-splitters>=0.3
 
 # Embedding models — everything in this recipe runs fully locally, no API key.
-sentence-transformers>=3.0
+sentence-transformers>=5.0    # SparseEncoder (real SPLADE support) needs 5.0+
 transformers>=4.40
 FlagEmbedding>=1.3        # BGE-M3 (dense + sparse + multi-vector in one model)
+rank_bm25>=0.2            # BM25 baseline for the BM25-vs-dense-vs-SPLADE comparison
 
 # Qwen3-Embedding and BGE-M3 both need these for their tokenizers.
 sentencepiece>=0.2
