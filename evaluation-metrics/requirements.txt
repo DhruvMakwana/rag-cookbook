@@ -1,0 +1,9 @@
+sentence-transformers>=6.0
+pypdf>=6.0
+requests>=2.31
+numpy>=2.0
+
+# Generation metrics
+sacrebleu>=2.4
+rouge-score>=0.1
+nltk>=3.9
