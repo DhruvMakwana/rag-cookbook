@@ -70,6 +70,74 @@ def demo_faiss(chunks: list, embeddings, query: str, embed_query) -> None:
 # --8<-- [end:faiss_demo]
 
 
+# --8<-- [start:faiss_ivf_demo]
+def demo_faiss_ivf(chunks: list, embeddings, query: str, embed_query, nlist: int = 8) -> None:
+    """IVF clusters vectors around `nlist` centroids (learned via
+    k-means in `.train()`) and only searches the `nprobe` closest
+    clusters at query time -- `nprobe=nlist` is equivalent to
+    exhaustive search over every cluster. IVF's benefits only show up
+    at real scale (thousands to millions of vectors); at a small corpus
+    the clusters are too sparse to demonstrate a real speed/recall
+    trade-off, though the code and training step are identical to
+    production usage."""
+    import faiss
+    import numpy as np
+
+    dim = embeddings.shape[1]
+    page_by_id = {c["id"]: c["page"] for c in chunks}
+    ids = np.array([c["id"] for c in chunks], dtype="int64")
+
+    quantizer = faiss.IndexFlatIP(dim)
+    ivf = faiss.IndexIVFFlat(quantizer, dim, nlist, faiss.METRIC_INNER_PRODUCT)
+    ivf.train(embeddings)  # k-means over the vectors themselves; required before add()
+    index = faiss.IndexIDMap2(ivf)
+    index.add_with_ids(embeddings, ids)
+
+    query_vec = embed_query(query).reshape(1, -1).astype("float32")
+
+    ivf.nprobe = 1
+    scores, result_ids = index.search(query_vec, 3)
+    print("nprobe=1:", [(page_by_id[cid], round(float(s), 3)) for s, cid in zip(scores[0], result_ids[0]) if cid != -1])
+
+    ivf.nprobe = nlist  # exhaustive -- searches every cluster
+    scores, result_ids = index.search(query_vec, 3)
+    print(f"nprobe={nlist} (exhaustive):", [(page_by_id[cid], round(float(s), 3)) for s, cid in zip(scores[0], result_ids[0]) if cid != -1])
+# --8<-- [end:faiss_ivf_demo]
+
+
+# --8<-- [start:pgvector_ivfflat_demo]
+def demo_pgvector_ivfflat(chunks: list, embeddings, query: str, embed_query, dsn: str) -> None:
+    """pgvector supports IVFFlat as an alternative to HNSW. `lists` is
+    sized per the pgvector README's own guidance: rows/1000 for under
+    1M rows, sqrt(rows) above that."""
+    import psycopg
+    from pgvector.psycopg import register_vector
+
+    dim = embeddings.shape[1]
+    lists = max(1, len(chunks) // 1000)
+    with psycopg.connect(dsn, autocommit=True) as conn:
+        register_vector(conn)
+        conn.execute("DROP TABLE IF EXISTS attention_paper_ivf")
+        conn.execute(f"CREATE TABLE attention_paper_ivf (id BIGINT PRIMARY KEY, page INT, embedding VECTOR({dim}))")
+
+        with conn.cursor() as cur:
+            cur.executemany(
+                "INSERT INTO attention_paper_ivf (id, page, embedding) VALUES (%s, %s, %s)",
+                [(c["id"], c["page"], embeddings[i]) for i, c in enumerate(chunks)],
+            )
+
+        conn.execute(f"CREATE INDEX ON attention_paper_ivf USING ivfflat (embedding vector_cosine_ops) WITH (lists = {lists})")
+        conn.execute("SET ivfflat.probes = 1")
+
+        query_vec = embed_query(query)
+        rows = conn.execute(
+            "SELECT page, embedding <=> %s AS distance FROM attention_paper_ivf ORDER BY embedding <=> %s LIMIT 3",
+            (query_vec, query_vec),
+        ).fetchall()
+        print(f"lists={lists}, probes=1:", [(page, round(d, 3)) for page, d in rows])
+# --8<-- [end:pgvector_ivfflat_demo]
+
+
 # --8<-- [start:chromadb_demo]
 def demo_chromadb(chunks: list, embeddings, query: str, embed_query) -> None:
     """ChromaDB's metadata is native -- a `where` filter alongside the

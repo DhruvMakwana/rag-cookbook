@@ -121,6 +121,43 @@ def demo_faiss(chunks: list[dict], embeddings: np.ndarray, model: SentenceTransf
         print(f"  page {page_by_id[cid]:>2}  score={score:.3f}")
 
 
+def demo_faiss_ivf(chunks: list[dict], embeddings: np.ndarray, model: SentenceTransformer) -> None:
+    """IVF clustering only pays off at real scale (thousands to millions
+    of vectors) -- at this corpus's 121 vectors, nlist has to be tiny
+    just to have enough vectors per cluster to search meaningfully."""
+    import faiss
+
+    dim = embeddings.shape[1]
+    page_by_id = {c["id"]: c["page"] for c in chunks}
+    ids = np.array([c["id"] for c in chunks], dtype="int64")
+
+    nlist = 8
+    quantizer = faiss.IndexFlatIP(dim)
+    ivf = faiss.IndexIVFFlat(quantizer, dim, nlist, faiss.METRIC_INNER_PRODUCT)
+    ivf.train(embeddings)
+    index = faiss.IndexIDMap2(ivf)
+    index.add_with_ids(embeddings, ids)
+
+    query = QUERIES[1]
+    query_vec = model.encode([query], convert_to_numpy=True, normalize_embeddings=True).astype("float32")
+
+    ivf.nprobe = 1
+    print(f"\n--- FAISS IVF: nprobe=1, top-3 for {query!r} ---")
+    scores, result_ids = index.search(query_vec, 3)
+    for score, cid in zip(scores[0], result_ids[0]):
+        if cid == -1:
+            continue
+        print(f"  page {page_by_id[cid]:>2}  score={score:.3f}")
+
+    ivf.nprobe = nlist  # equivalent to exhaustive search over all clusters
+    print(f"--- FAISS IVF: nprobe={nlist} (exhaustive), top-3 for {query!r} ---")
+    scores, result_ids = index.search(query_vec, 3)
+    for score, cid in zip(scores[0], result_ids[0]):
+        if cid == -1:
+            continue
+        print(f"  page {page_by_id[cid]:>2}  score={score:.3f}")
+
+
 # ======================================================================
 # ChromaDB -- metadata is native (a `where` filter alongside the vector
 # query), and HNSW tuning lives in a structured `configuration={"hnsw": ...}`
@@ -323,6 +360,42 @@ def demo_pgvector(chunks: list[dict], embeddings: np.ndarray, model: SentenceTra
             print(f"  page {page:>2}  distance={distance:.3f}")
 
 
+def demo_pgvector_ivfflat(chunks: list[dict], embeddings: np.ndarray, model: SentenceTransformer) -> None:
+    """pgvector supports both HNSW and IVFFlat. `lists` is sized off
+    the README's own guidance (rows/1000 for under 1M rows), which at
+    this corpus's 121 rows rounds down to a minimum of 1 -- another
+    real illustration that IVF is a large-scale technique."""
+    import psycopg
+    from pgvector.psycopg import register_vector
+
+    dim = embeddings.shape[1]
+    lists = max(1, len(chunks) // 1000)
+    with psycopg.connect(PG_DSN, autocommit=True) as conn:
+        register_vector(conn)
+        conn.execute("DROP TABLE IF EXISTS attention_paper_ivf")
+        conn.execute(f"CREATE TABLE attention_paper_ivf (id BIGINT PRIMARY KEY, page INT, embedding VECTOR({dim}))")
+
+        with conn.cursor() as cur:
+            cur.executemany(
+                "INSERT INTO attention_paper_ivf (id, page, embedding) VALUES (%s, %s, %s)",
+                [(c["id"], c["page"], embeddings[i]) for i, c in enumerate(chunks)],
+            )
+
+        conn.execute(f"CREATE INDEX ON attention_paper_ivf USING ivfflat (embedding vector_cosine_ops) WITH (lists = {lists})")
+        conn.execute("SET ivfflat.probes = 1")
+
+        query = QUERIES[2]
+        query_vec = model.encode(query, normalize_embeddings=True)
+
+        print(f"\n--- pgvector IVFFlat: lists={lists}, probes=1, top-3 for {query!r} ---")
+        rows = conn.execute(
+            "SELECT page, embedding <=> %s AS distance FROM attention_paper_ivf ORDER BY embedding <=> %s LIMIT 3",
+            (query_vec, query_vec),
+        ).fetchall()
+        for page, distance in rows:
+            print(f"  page {page:>2}  distance={distance:.3f}")
+
+
 # ======================================================================
 # Weaviate -- vectors are supplied directly (`self_provided`, skipping
 # its built-in vectorizer modules since embeddings already exist), and
@@ -385,6 +458,7 @@ if __name__ == "__main__":
 
     if args.db in ("faiss", "all"):
         demo_faiss(chunks, embeddings, model)
+        demo_faiss_ivf(chunks, embeddings, model)
     if args.db in ("chroma", "all"):
         demo_chromadb(chunks, embeddings, model)
     if args.db in ("qdrant", "all"):
@@ -393,5 +467,6 @@ if __name__ == "__main__":
         demo_milvus(chunks, embeddings, model)
     if args.db in ("pgvector", "all"):
         demo_pgvector(chunks, embeddings, model)
+        demo_pgvector_ivfflat(chunks, embeddings, model)
     if args.db in ("weaviate", "all"):
         demo_weaviate(chunks, embeddings, model)
