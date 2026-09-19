@@ -1,0 +1,13 @@
+sentence-transformers>=6.0
+pypdf>=6.0
+requests>=2.31
+numpy>=2.0
+
+# Vector databases
+faiss-cpu>=1.15
+chromadb>=1.5
+qdrant-client>=1.19
+pymilvus[milvus_lite]>=3.0
+psycopg[binary]>=3.3
+pgvector>=0.5
+weaviate-client>=4.23
