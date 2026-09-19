@@ -1,0 +1,19 @@
+# ragas's own code (ragas/llms/base.py, current 0.4.3) unconditionally
+# imports langchain_community.chat_models.vertexai -- a module langchain-
+# community removed in its 0.4.x line (moved to the separate
+# langchain-google-vertexai package). ragas itself has no upper pin on
+# langchain-community, so a plain `pip install ragas` pulls the latest
+# 0.4.x and breaks on import. Pin to the last 0.3.x release, which still
+# has the module.
+langchain-community==0.3.31
+
+ragas>=0.4.3
+langchain-anthropic>=0.3
+langchain-huggingface>=0.1    # ragas's own HuggingfaceEmbeddings wrapper is broken in 0.4.3 -- see README
+anthropic>=0.34
+sentence-transformers>=3.0
+
+pypdf>=4.0
+langchain-text-splitters>=0.2
+python-dotenv>=1.0
+requests>=2.31
