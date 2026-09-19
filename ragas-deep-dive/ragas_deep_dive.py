@@ -152,23 +152,15 @@ def run_ragas_eval(samples: list[dict]):
         ResponseRelevancy,
     )
 
-    # ragas's own `HuggingfaceEmbeddings` wrapper is broken in this release
-    # -- instantiating it directly raises a pydantic ValidationError from
-    # `BaseRagasEmbeddings`'s custom `__get_pydantic_core_schema__`, before
-    # you even reach the (also real) missing-async-method issue. The fix
-    # is to not use it: wrap a plain LangChain embeddings object with
-    # `LangchainEmbeddingsWrapper` instead -- the same pattern already used
-    # for the judge LLM via `LangchainLLMWrapper`.
-    # Sonnet 5 (and current-generation Claude models generally) removed
-    # sampling params -- temperature/top_p/top_k are no longer accepted at
-    # all, replaced by adaptive thinking. `LangchainLLMWrapper.agenerate_text`
-    # sets `self.langchain_llm.temperature = 0.01` before every single call
-    # by default (its own hardcoded assumption that every LLM accepts
-    # temperature) -- passing `temperature=0` or omitting it entirely at
-    # construction doesn't help, since the wrapper overwrites it per call
-    # regardless. `bypass_temperature=True` is the wrapper's own documented
-    # escape hatch for exactly this case ("Certain LLMs ... do not support
-    # temperature").
+    # ragas's own `HuggingfaceEmbeddings` wrapper fails pydantic validation
+    # on direct instantiation in this release -- wrap a plain LangChain
+    # embeddings object with `LangchainEmbeddingsWrapper` instead, the same
+    # pattern already used for the judge LLM via `LangchainLLMWrapper`.
+    # Sonnet 5 (and current-generation Claude models generally) no longer
+    # accept sampling params -- temperature/top_p/top_k -- using adaptive
+    # thinking instead. `LangchainLLMWrapper` sets a temperature value on
+    # the underlying model before every call by default; `bypass_temperature
+    # =True` is its documented flag for LLMs that don't support the param.
     evaluator_llm = LangchainLLMWrapper(ChatAnthropic(model=JUDGE_MODEL), bypass_temperature=True)
     evaluator_embeddings = LangchainEmbeddingsWrapper(HuggingFaceEmbeddings(model_name=f"sentence-transformers/{TEXT_EMBEDDING_MODEL}"))
 

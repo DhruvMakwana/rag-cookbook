@@ -41,19 +41,17 @@ def run_naive_rag(question: str, chunks: list, reference: str) -> dict:
 def run_ragas_eval(samples: list) -> object:
     """Scores real pipeline output with RAGAS's four core metrics.
     `samples` is a list of dicts shaped like `run_naive_rag`'s return
-    value. Two real fixes are needed to get this running at all in the
-    current ragas release, both applied here:
+    value.
 
-    1. ragas's own `HuggingfaceEmbeddings` wrapper is broken (a pydantic
-       validation error on direct instantiation) -- use
-       `LangchainEmbeddingsWrapper` around a real `langchain-huggingface`
-       embeddings object instead, the same pattern already used for the
-       judge LLM via `LangchainLLMWrapper`.
-    2. Current Claude models (Sonnet 5 and later) no longer accept a
-       `temperature` parameter at all -- `LangchainLLMWrapper` sets
-       `temperature=0.01` on the underlying model before every call by
-       default, which a 400 error on these models. `bypass_temperature=True`
-       is the wrapper's own documented escape hatch for exactly this case.
+    Setup requirements for this ragas release: embeddings go through
+    `LangchainEmbeddingsWrapper` around a real `langchain-huggingface`
+    embeddings object, the same pattern used for the judge LLM via
+    `LangchainLLMWrapper` -- ragas's own `HuggingfaceEmbeddings` wrapper
+    fails pydantic validation on direct instantiation. The judge LLM
+    wrapper also needs `bypass_temperature=True`, since current Claude
+    models (Sonnet 5 and later) no longer accept a `temperature`
+    parameter, which `LangchainLLMWrapper` otherwise sets on the
+    underlying model before every call by default.
     """
     from langchain_anthropic import ChatAnthropic
     from langchain_huggingface import HuggingFaceEmbeddings
