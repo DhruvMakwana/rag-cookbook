@@ -179,6 +179,83 @@ def run_ragas_eval(samples: list[dict]):
     return result
 
 
+# ======================================================================
+# 3. Beyond the core four -- additional metrics via ragas's modern
+#    `ragas.metrics.collections` + `llm_factory` API, and automatic
+#    eval-set generation via `TestsetGenerator`.
+# ======================================================================
+
+
+def make_modern_judge_llm():
+    """Builds a judge LLM for the modern `ragas.metrics.collections` API.
+    Current Claude models don't accept `temperature` or `top_p` -- both
+    are removed from the constructed LLM's own `model_args` dict, since
+    this API has no `bypass_temperature`-equivalent constructor flag."""
+    from anthropic import AsyncAnthropic
+    from ragas.llms import llm_factory
+
+    llm = llm_factory(JUDGE_MODEL, provider="anthropic", client=AsyncAnthropic())
+    del llm.model_args["temperature"]
+    del llm.model_args["top_p"]
+    return llm
+
+
+async def run_extended_metrics_async(samples: list[dict]) -> dict:
+    from ragas.embeddings import HuggingFaceEmbeddings
+    from ragas.metrics.collections import AnswerCorrectness, FactualCorrectness, NoiseSensitivity, SemanticSimilarity
+
+    evaluator_embeddings = HuggingFaceEmbeddings(model=f"sentence-transformers/{TEXT_EMBEDDING_MODEL}", use_api=False)
+
+    correctness = AnswerCorrectness(llm=make_modern_judge_llm(), embeddings=evaluator_embeddings)
+    similarity = SemanticSimilarity(embeddings=evaluator_embeddings)
+    factual = FactualCorrectness(llm=make_modern_judge_llm())
+    noise = NoiseSensitivity(llm=make_modern_judge_llm())
+
+    rows = []
+    for s in samples:
+        answer_correctness = await correctness.ascore(user_input=s["question"], response=s["answer"], reference=s["reference"])
+        semantic_similarity = await similarity.ascore(reference=s["reference"], response=s["answer"])
+        factual_correctness = await factual.ascore(response=s["answer"], reference=s["reference"])
+        noise_sensitivity = await noise.ascore(
+            user_input=s["question"], response=s["answer"], reference=s["reference"], retrieved_contexts=s["retrieved_contexts"],
+        )
+        rows.append({
+            "question": s["question"],
+            "answer_correctness": answer_correctness.value,
+            "semantic_similarity": semantic_similarity.value,
+            "factual_correctness": factual_correctness.value,
+            "noise_sensitivity": noise_sensitivity.value,
+        })
+    return rows
+
+
+def run_extended_metrics(samples: list[dict]) -> list[dict]:
+    import asyncio
+
+    return asyncio.run(run_extended_metrics_async(samples))
+
+
+def run_testset_generation(testset_size: int = 6):
+    """Synthetic eval-set generation from the source document -- for
+    when there's no hand-written eval set yet. Uses the legacy
+    LangchainLLMWrapper/LangchainEmbeddingsWrapper, not the modern
+    collections API, since TestsetGenerator's constructor expects those
+    wrapper types specifically. Needs the optional `rapidfuzz` package
+    for its internal relationship-builder transform."""
+    from langchain_anthropic import ChatAnthropic
+    from langchain_core.documents import Document as LCDocument
+    from langchain_huggingface import HuggingFaceEmbeddings
+    from ragas.embeddings import LangchainEmbeddingsWrapper
+    from ragas.llms import LangchainLLMWrapper
+    from ragas.testset import TestsetGenerator
+
+    docs = [LCDocument(page_content=load_sample_text())]
+    llm = LangchainLLMWrapper(ChatAnthropic(model=JUDGE_MODEL), bypass_temperature=True)
+    embeddings = LangchainEmbeddingsWrapper(HuggingFaceEmbeddings(model_name=f"sentence-transformers/{TEXT_EMBEDDING_MODEL}"))
+    generator = TestsetGenerator(llm=llm, embedding_model=embeddings)
+    return generator.generate_with_langchain_docs(docs, testset_size=testset_size)
+
+
 def run_comparison(provider: str | None = None) -> None:
     load_environment()
     print(f"Running naive RAG over {len(EVAL_SET)} questions...")
@@ -197,14 +274,32 @@ def run_comparison(provider: str | None = None) -> None:
     print()
     print("Aggregate:", result)
 
+    print("\n=== Extended metrics (modern collections API) ===")
+    extended = run_extended_metrics(samples)
+    import pandas as pd
+    print(pd.DataFrame(extended).to_string())
+    print()
+    print("Aggregate:", pd.DataFrame(extended).drop(columns=["question"]).mean().to_dict())
+
+
+def run_testset_demo(testset_size: int = 6) -> None:
+    load_environment()
+    print(f"Generating {testset_size} synthetic questions from the sample paper...")
+    testset = run_testset_generation(testset_size)
+    df = testset.to_pandas()
+    print(df[["user_input", "reference", "synthesizer_name"]].to_string())
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="RAGAS deep dive demo.")
-    parser.add_argument("--compare", action="store_true", help="Run naive RAG + score it with all 4 RAGAS metrics.")
+    parser.add_argument("--compare", action="store_true", help="Run naive RAG + score it with all 4 core RAGAS metrics plus the extended set.")
+    parser.add_argument("--testset", action="store_true", help="Generate a synthetic eval set from the sample document.")
     parser.add_argument("--provider", choices=["anthropic", "openai"], default=None)
     args = parser.parse_args()
 
     if args.compare:
         run_comparison(args.provider)
+    elif args.testset:
+        run_testset_demo()
     else:
         parser.print_help()

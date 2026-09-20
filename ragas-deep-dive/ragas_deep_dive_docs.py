@@ -89,3 +89,78 @@ def run_ragas_eval(samples: list) -> object:
     # default assumes.
     return evaluate(dataset=dataset, metrics=metrics, run_config=RunConfig(max_workers=4, timeout=180))
 # --8<-- [end:ragas_eval]
+
+
+# --8<-- [start:extended_metrics]
+async def run_extended_metrics(sample: dict, judge_model: str = "claude-sonnet-5") -> dict:
+    """Scores one sample with four metrics from ragas's modern
+    `ragas.metrics.collections` API -- AnswerCorrectness (a weighted
+    blend of factual correctness and semantic similarity),
+    SemanticSimilarity on its own, FactualCorrectness, and
+    NoiseSensitivity. `sample` needs question/answer/reference/
+    retrieved_contexts keys, matching `run_naive_rag`'s return shape.
+
+    This API builds its LLM via `llm_factory` + the `instructor`
+    library rather than LangChain, so `LangchainLLMWrapper`'s
+    `bypass_temperature` flag doesn't apply here -- current Claude
+    models reject both `temperature` and `top_p`, and this API has no
+    equivalent constructor flag, so both are removed directly from the
+    constructed LLM's own `model_args` dict. Needs `instructor>=1.17`;
+    older versions fail to parse a response when the model returns a
+    ThinkingBlock before its text content.
+    """
+    from anthropic import AsyncAnthropic
+    from ragas.embeddings import HuggingFaceEmbeddings
+    from ragas.llms import llm_factory
+    from ragas.metrics.collections import AnswerCorrectness, FactualCorrectness, NoiseSensitivity, SemanticSimilarity
+
+    def make_judge_llm():
+        llm = llm_factory(judge_model, provider="anthropic", client=AsyncAnthropic())
+        del llm.model_args["temperature"]
+        del llm.model_args["top_p"]
+        return llm
+
+    embeddings = HuggingFaceEmbeddings(model="sentence-transformers/all-MiniLM-L6-v2", use_api=False)
+
+    correctness = AnswerCorrectness(llm=make_judge_llm(), embeddings=embeddings)
+    similarity = SemanticSimilarity(embeddings=embeddings)
+    factual = FactualCorrectness(llm=make_judge_llm())
+    noise = NoiseSensitivity(llm=make_judge_llm())
+
+    answer_correctness = await correctness.ascore(user_input=sample["question"], response=sample["answer"], reference=sample["reference"])
+    semantic_similarity = await similarity.ascore(reference=sample["reference"], response=sample["answer"])
+    factual_correctness = await factual.ascore(response=sample["answer"], reference=sample["reference"])
+    noise_sensitivity = await noise.ascore(
+        user_input=sample["question"], response=sample["answer"], reference=sample["reference"], retrieved_contexts=sample["retrieved_contexts"],
+    )
+    return {
+        "answer_correctness": answer_correctness.value,
+        "semantic_similarity": semantic_similarity.value,
+        "factual_correctness": factual_correctness.value,
+        "noise_sensitivity": noise_sensitivity.value,
+    }
+# --8<-- [end:extended_metrics]
+
+
+# --8<-- [start:testset_generation]
+def generate_testset(document_text: str, testset_size: int = 6, judge_model: str = "claude-sonnet-5") -> object:
+    """Generates a synthetic eval set (question + reference answer
+    pairs) directly from a source document, for when there's no
+    hand-written eval set yet. Uses the legacy LangchainLLMWrapper/
+    LangchainEmbeddingsWrapper, not the modern collections API, since
+    TestsetGenerator's constructor expects those wrapper types
+    specifically. Needs the optional `rapidfuzz` package for its
+    internal relationship-builder transform."""
+    from langchain_anthropic import ChatAnthropic
+    from langchain_core.documents import Document as LCDocument
+    from langchain_huggingface import HuggingFaceEmbeddings
+    from ragas.embeddings import LangchainEmbeddingsWrapper
+    from ragas.llms import LangchainLLMWrapper
+    from ragas.testset import TestsetGenerator
+
+    docs = [LCDocument(page_content=document_text)]
+    llm = LangchainLLMWrapper(ChatAnthropic(model=judge_model), bypass_temperature=True)
+    embeddings = LangchainEmbeddingsWrapper(HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2"))
+    generator = TestsetGenerator(llm=llm, embedding_model=embeddings)
+    return generator.generate_with_langchain_docs(docs, testset_size=testset_size)
+# --8<-- [end:testset_generation]
